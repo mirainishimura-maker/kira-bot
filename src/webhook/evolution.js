@@ -97,6 +97,7 @@ async function processMessage(data) {
     context: { activeTasks: tasks, recentMemory: memory },
   });
 
+  const senderJid = channel === CHANNEL_GROUP ? matchedJid : remoteJid;
   await dispatchMessages(result.messages, { senderJid });
   logActions(result.actions);
   logAlerts(result.alerts);
