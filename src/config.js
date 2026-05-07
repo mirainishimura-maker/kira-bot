@@ -29,5 +29,12 @@ export const config = {
     model: process.env.OPENAI_MODEL ?? 'gpt-4.1',
   },
 
+  // Apps Script Web App de la hoja de productividad de Luisa. Opcional —
+  // si no está configurado, KIRA simplemente no escribe en la hoja.
+  sheets: {
+    url:    process.env.SHEETS_WEBHOOK_URL    || null,
+    secret: process.env.SHEETS_WEBHOOK_SECRET || null,
+  },
+
   webhookSecret: process.env.WEBHOOK_SECRET ?? '',
 };
