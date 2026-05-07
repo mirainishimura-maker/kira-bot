@@ -1,10 +1,14 @@
 import { supabase } from '../lib/supabase.js';
 
-// Convierte "51999999999@s.whatsapp.net" → "51999999999"
+// Extrae el número E.164 (sin +) de un JID de WhatsApp.
+// WhatsApp usa varios sufijos: @s.whatsapp.net (privados), @lid (grupos
+// modernos con Linked ID), @c.us (legacy). Ignora también el ":N" de
+// device id que aparece a veces (ej: "51999...:23@s.whatsapp.net").
 export function phoneFromJid(jid) {
   if (!jid) return null;
-  const match = jid.match(/^(\d{10,15})@s\.whatsapp\.net$/);
-  return match ? match[1] : null;
+  const cleaned = String(jid).replace(/:\d+@/, '@');
+  const m = cleaned.match(/^(\d{10,15})@(?:s\.whatsapp\.net|lid|c\.us)$/);
+  return m ? m[1] : null;
 }
 
 // Devuelve el miembro identificado por número, o null si no existe.

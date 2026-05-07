@@ -54,16 +54,33 @@ async function processMessage(data) {
     if (!isAddressedToKira(text)) return;
   }
 
-  // Identificamos al miembro por el número que envió el mensaje.
-  // En privado: el remoteJid ES el del miembro.
-  // En grupo: lo trae participant.
-  const senderJid = channel === CHANNEL_GROUP ? data?.key?.participant : remoteJid;
-  const phone = phoneFromJid(senderJid);
+  // Identificamos al miembro por el número.
+  // Privado: senderJid = remoteJid.
+  // Grupo: senderJid = key.participant (a veces @lid anónimo).
+  // Probamos varios campos por si Evolution lo expone en distintos lugares.
+  const candidateJids = channel === CHANNEL_GROUP
+    ? [
+        data?.key?.participant,
+        data?.key?.participantPn,
+        data?.participantPn,
+        data?.key?.participantAlt,
+      ].filter(Boolean)
+    : [remoteJid];
+
+  let phone = null;
+  let matchedJid = null;
+  for (const j of candidateJids) {
+    const p = phoneFromJid(j);
+    if (p) { phone = p; matchedJid = j; break; }
+  }
   const member = await findMemberByPhone(phone);
 
   if (!member) {
-    console.log(`[webhook] mensaje de número desconocido (${phone}). Ignorado por ahora.`);
+    console.log(`[webhook] no identificado | channel=${channel} | tried=${JSON.stringify(candidateJids)} | parsed=${phone} | pushName=${data?.pushName ?? '?'}`);
     return;
+  }
+  if (matchedJid && matchedJid !== candidateJids[0]) {
+    console.log(`[webhook] usado JID alterno (${matchedJid}) en lugar del primero`);
   }
 
   console.log(`[webhook] ${channel} | ${member.name}: ${text.slice(0, 80)}`);
