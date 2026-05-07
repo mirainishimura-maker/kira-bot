@@ -1,0 +1,5 @@
+import OpenAI from 'openai';
+import { config } from '../config.js';
+
+export const openai = new OpenAI({ apiKey: config.openai.apiKey });
+export const MODEL = config.openai.model;
