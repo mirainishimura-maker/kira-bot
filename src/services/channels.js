@@ -15,20 +15,23 @@ export function detectChannel(remoteJid) {
   return null;
 }
 
-// El primer mensaje del grupo nos da su JID. Lo cacheamos en memoria del proceso.
-// El siguiente paso natural es persistirlo (env, BD), pero por ahora alcanza.
-let cachedGroupJid = config.evolution.groupJid;
-
+// El JID del grupo del equipo de marketing. Lo seteas en env como GROUP_JID.
+// Cualquier mensaje de OTRO grupo se ignora.
 export function getGroupJid() {
-  return cachedGroupJid;
+  return config.evolution.groupJid;
 }
 
-export function rememberGroupJid(remoteJid) {
-  if (!remoteJid?.endsWith(GROUP_SUFFIX)) return;
-  if (cachedGroupJid === remoteJid) return;
-  cachedGroupJid = remoteJid;
-  console.log(`[channels] GROUP_JID capturado: ${remoteJid}`);
-  console.log('[channels] Guarda este valor en EasyPanel como GROUP_JID para persistirlo entre reinicios.');
+// ¿Este grupo es el del equipo de marketing?
+export function isAuthorizedGroup(remoteJid) {
+  const configured = config.evolution.groupJid;
+  if (!configured) return false;
+  return remoteJid === configured;
+}
+
+// Para ayudar a descubrir el JID correcto durante el setup inicial.
+export function logGroupForDiscovery(remoteJid, senderName) {
+  console.log(`[channels] mensaje de grupo no autorizado | JID=${remoteJid} | de=${senderName ?? '?'}`);
+  console.log('[channels] Si ESTE es el grupo del equipo de marketing, copia el JID de arriba a la env var GROUP_JID y redespliega.');
 }
 
 // ¿El mensaje de grupo está dirigido a KIRA?

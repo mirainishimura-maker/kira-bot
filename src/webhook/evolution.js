@@ -3,14 +3,14 @@
 // Solo nos interesa MESSAGES_UPSERT con mensajes entrantes (fromMe=false).
 
 import {
-  detectChannel, rememberGroupJid, isAddressedToKira,
+  detectChannel, isAuthorizedGroup, logGroupForDiscovery,
+  isAddressedToKira, getGroupJid,
   CHANNEL_GROUP, CHANNEL_PRIVATE,
 } from '../services/channels.js';
 import { findMemberByPhone, phoneFromJid } from '../services/members.js';
 import { recentMemory, saveMemory, activeTasks } from '../services/memory.js';
 import { ask } from '../services/ai.js';
 import { sendText } from '../lib/evolution.js';
-import { getGroupJid } from '../services/channels.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -45,9 +45,12 @@ async function processMessage(data) {
   const text = extractText(data);
   if (!text) return;
 
-  // En grupo: solo respondemos si nos hablan a nosotros.
+  // En grupo: solo el grupo del equipo de marketing, y solo si nos hablan.
   if (channel === CHANNEL_GROUP) {
-    rememberGroupJid(remoteJid);
+    if (!isAuthorizedGroup(remoteJid)) {
+      logGroupForDiscovery(remoteJid, data?.pushName);
+      return;
+    }
     if (!isAddressedToKira(text)) return;
   }
 
