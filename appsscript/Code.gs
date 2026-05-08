@@ -56,6 +56,9 @@ function doPost(e) {
       case 'update':
         return updateRow(body);
 
+      case 'read':
+        return readRows(body);
+
       default:
         return json({ ok: false, error: `Unknown action: ${body.action}` }, 400);
     }
@@ -87,6 +90,53 @@ function updateRow(body) {
     }
   }
   return json({ ok: true, updated_row: rowIndex });
+}
+
+// Lee filas de la hoja con filtros opcionales (date, name, status).
+// Útil para que KIRA consulte el estado actual antes de responder al usuario.
+//
+// body: { date?, name?, status?, limit? }
+//   - date:   string exacto en formato dd/mm (mismo que escribimos)
+//   - name:   substring case-insensitive del nombre (ej: "piero" matchea "Piero")
+//   - status: string exacto (ENTREGADO | EN PROCESO | BLOQUEADO | POR REALIZAR)
+//   - limit:  máximo de filas a devolver (default 50, max 200)
+//
+// Devuelve las filas más recientes primero.
+function readRows(body) {
+  const sheet = getSheet_();
+  const last = sheet.getLastRow();
+  if (last < 2) return json({ ok: true, rows: [] });
+
+  // Usamos getDisplayValues() (lo que se ve en la celda) en vez de getValues()
+  // (el dato crudo) — algunas filas tienen fechas como objeto Date y otras como
+  // string. El display siempre es lo que el usuario ve ("08/05").
+  const all = sheet.getRange(2, 1, last - 1, 8).getDisplayValues();
+  const wantDate   = body.date ? String(body.date).trim() : null;
+  const wantName   = body.name ? String(body.name).trim().toLowerCase() : null;
+  const wantStatus = body.status ? String(body.status).trim() : null;
+  const limit = Math.max(1, Math.min(Number(body.limit) || 50, 200));
+
+  const rows = [];
+  for (let i = all.length - 1; i >= 0 && rows.length < limit; i--) {
+    const r = all[i];
+    const row = {
+      row_index:     i + 2, // 1-based como en la hoja
+      date:          String(r[COL.date          - 1] ?? '').trim(),
+      name:          String(r[COL.name          - 1] ?? '').trim(),
+      area:          String(r[COL.area          - 1] ?? '').trim(),
+      pendientes:    String(r[COL.pendientes    - 1] ?? '').trim(),
+      estado:        String(r[COL.estado        - 1] ?? '').trim(),
+      prioridad:     String(r[COL.prioridad     - 1] ?? '').trim(),
+      seguimiento:   String(r[COL.seguimiento   - 1] ?? '').trim(),
+      observaciones: String(r[COL.observaciones - 1] ?? '').trim(),
+    };
+    if (!row.name && !row.pendientes) continue; // fila vacía
+    if (wantDate   && row.date !== wantDate) continue;
+    if (wantName   && !row.name.toLowerCase().includes(wantName)) continue;
+    if (wantStatus && row.estado !== wantStatus) continue;
+    rows.push(row);
+  }
+  return json({ ok: true, rows, count: rows.length });
 }
 
 function buildRowArray_(body) {

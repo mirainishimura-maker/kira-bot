@@ -3,9 +3,10 @@
 //   node scripts/test-sheets.js ping
 //   node scripts/test-sheets.js append
 //   node scripts/test-sheets.js update
+//   node scripts/test-sheets.js read [name] [status]
 
 import {
-  ping, appendDailyEntry, upsertDailyEntry, todayLabel,
+  ping, appendDailyEntry, upsertDailyEntry, readEntries, todayLabel,
 } from '../src/services/sheets.js';
 
 const command = process.argv[2] ?? 'ping';
@@ -44,7 +45,14 @@ async function main() {
     console.log('update ->', r);
     return;
   }
-  console.error('Comando desconocido. Usa: ping | append | update');
+  if (command === 'read') {
+    const name   = process.argv[3] || undefined;
+    const status = process.argv[4] || undefined;
+    const r = await readEntries({ name, status, limit: 20 });
+    console.log('read ->', JSON.stringify(r, null, 2));
+    return;
+  }
+  console.error('Comando desconocido. Usa: ping | append | update | read');
   process.exit(1);
 }
 

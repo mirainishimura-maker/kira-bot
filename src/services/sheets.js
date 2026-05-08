@@ -82,6 +82,12 @@ export function upsertDailyEntry({
   return call('update', { date, name, area, pendientes, estado, prioridad, seguimiento, observaciones });
 }
 
+// Lee filas de la hoja con filtros opcionales. Devuelve {ok, rows, count}.
+// Filtros: date (exacto dd/mm), name (substring case-insensitive), status (exacto).
+export function readEntries({ date, name, status, limit } = {}) {
+  return call('read', { date, name, status, limit });
+}
+
 // Helpers para que el resto del bot no sepa de strings de Excel.
 export function statusLabel(status) {
   return STATUS_TO_ESTADO[status] ?? '';

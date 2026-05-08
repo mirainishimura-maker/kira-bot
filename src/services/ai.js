@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 import { openai, MODEL } from '../lib/openai.js';
+import { readEntries, todayLabel } from './sheets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT = readFileSync(
@@ -10,31 +11,122 @@ const SYSTEM_PROMPT = readFileSync(
   'utf8',
 );
 
-// Llama a GPT-4.1 con el system prompt + contexto + mensaje. Devuelve el JSON
-// estructurado de KIRA (messages / actions / alerts).
+const MAX_TOOL_ROUNDS = 4;
+
+// Tools que GPT puede llamar durante una respuesta. Cada vez que GPT pide una
+// tool, la ejecutamos y le devolvemos el resultado para que pueda continuar.
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'read_sheet',
+      description:
+        'Lee filas de la hoja de productividad de Luisa. Úsala cuando alguien te pida ver pendientes, ' +
+        'tareas asignadas, qué entregó alguien, qué hay en proceso, etc. Filtra por fecha, nombre o estado. ' +
+        'Sin filtros devuelve las últimas 50 filas (las más recientes primero). La fecha de hoy es ' +
+        '"' + todayLabel() + '" (formato dd/mm).',
+      parameters: {
+        type: 'object',
+        properties: {
+          date: {
+            type: 'string',
+            description: 'Fecha exacta en formato dd/mm (ej: "08/05"). Omite para no filtrar por fecha.',
+          },
+          name: {
+            type: 'string',
+            description: 'Nombre o substring del miembro (ej: "Piero", "analu"). Case-insensitive, coincidencia parcial.',
+          },
+          status: {
+            type: 'string',
+            enum: ['ENTREGADO', 'EN PROCESO', 'BLOQUEADO', 'POR REALIZAR'],
+            description: 'Estado exacto. Omite para no filtrar.',
+          },
+          limit: {
+            type: 'integer',
+            description: 'Máximo de filas (default 50, max 200).',
+            minimum: 1,
+            maximum: 200,
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+];
+
+// Despachador de tools. Si agregas una nueva tool en TOOLS, agrega su handler aquí.
+async function executeTool(name, args) {
+  if (name === 'read_sheet') {
+    const result = await readEntries(args ?? {});
+    if (!result.ok) {
+      return { ok: false, error: 'No pude leer la hoja en este momento.' };
+    }
+    return { ok: true, rows: result.data?.rows ?? [], count: result.data?.count ?? 0 };
+  }
+  return { ok: false, error: `Tool desconocida: ${name}` };
+}
+
+// Llama a GPT-4.1 con el system prompt + contexto + mensaje. Si GPT decide
+// llamar a tools, las ejecutamos y volvemos a llamarlo hasta que responda con
+// el JSON estructurado de KIRA (messages / actions / alerts).
 export async function ask({ member, channel, message, context }) {
   const userBlock = buildUserBlock({ member, channel, message, context });
 
-  const completion = await openai.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user',   content: userBlock },
-    ],
-    response_format: { type: 'json_object' },
-    temperature: 0.4,
-  });
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user',   content: userBlock },
+  ];
 
-  const raw = completion.choices?.[0]?.message?.content ?? '{}';
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const completion = await openai.chat.completions.create({
+      model: MODEL,
+      messages,
+      tools: TOOLS,
+      tool_choice: 'auto',
+      temperature: 0.4,
+    });
 
+    const msg = completion.choices?.[0]?.message;
+    if (!msg) break;
+
+    if (msg.tool_calls?.length) {
+      messages.push(msg);
+      for (const call of msg.tool_calls) {
+        let args = {};
+        try { args = JSON.parse(call.function.arguments || '{}'); }
+        catch { args = {}; }
+        const result = await executeTool(call.function.name, args);
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify(result),
+        });
+        console.log(`[ai] tool ${call.function.name}(${JSON.stringify(args)}) → ${result.ok ? 'ok' : 'err'} (${result.count ?? '?'})`);
+      }
+      continue;
+    }
+
+    return parseFinalResponse(msg.content);
+  }
+
+  console.warn(`[ai] alcanzado MAX_TOOL_ROUNDS=${MAX_TOOL_ROUNDS} sin respuesta final`);
+  return {
+    messages: [{ channel: channel === 'group' ? 'group' : 'private', text: 'Tuve un problema procesando esto. ¿Me lo puedes repetir?' }],
+    actions: [],
+    alerts: [],
+  };
+}
+
+function parseFinalResponse(content) {
+  const raw = content ?? '{}';
   let parsed;
   try {
     parsed = JSON.parse(raw);
-  } catch (err) {
-    console.error('[ai] JSON inválido de GPT:', raw);
-    parsed = { messages: [], actions: [], alerts: [] };
+  } catch {
+    // GPT respondió texto plano cuando esperábamos JSON. Lo envolvemos.
+    console.warn('[ai] respuesta no-JSON, envolviendo:', raw.slice(0, 200));
+    parsed = { messages: [{ channel: 'private', text: String(raw) }], actions: [], alerts: [] };
   }
-
   parsed.messages = parsed.messages ?? [];
   parsed.actions  = parsed.actions  ?? [];
   parsed.alerts   = parsed.alerts   ?? [];
