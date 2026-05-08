@@ -10,6 +10,7 @@ import {
 import { findMemberByPhone, phoneFromJid } from '../services/members.js';
 import { recentMemory, saveMemory, activeTasks } from '../services/memory.js';
 import { ask } from '../services/ai.js';
+import { executeActions } from '../services/actions.js';
 import { sendText } from '../lib/evolution.js';
 
 export async function handleWebhook(req, res) {
@@ -99,7 +100,7 @@ async function processMessage(data) {
 
   const senderJid = channel === CHANNEL_GROUP ? matchedJid : remoteJid;
   await dispatchMessages(result.messages, { senderJid });
-  logActions(result.actions);
+  await executeActions(result.actions, { sender: member, channel });
   logAlerts(result.alerts);
 
   await saveMemory({
@@ -145,11 +146,6 @@ async function dispatchMessages(messages, { senderJid }) {
       console.error('[webhook] fallo enviando a', jid, err.message);
     }
   }
-}
-
-function logActions(actions) {
-  if (!actions?.length) return;
-  console.log('[webhook] actions pendientes (TODO ejecutar):', JSON.stringify(actions));
 }
 
 function logAlerts(alerts) {
