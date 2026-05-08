@@ -72,6 +72,7 @@ function appendRow(body) {
   const row = buildRowArray_(body);
   sheet.appendRow(row);
   const lastRow = sheet.getLastRow();
+  reorderAndBorder_(sheet);
   return json({ ok: true, appended_row: lastRow });
 }
 
@@ -89,7 +90,76 @@ function updateRow(body) {
       sheet.getRange(rowIndex, i + 1).setValue(row[i]);
     }
   }
+  reorderAndBorder_(sheet);
   return json({ ok: true, updated_row: rowIndex });
+}
+
+// Reordena las filas de datos: pendientes arriba, ENTREGADO/COMPLETO abajo.
+// Pinta un borde grueso entre la última fila pendiente y la primera entregada.
+// Se llama desde appendRow, updateRow y desde onEdit (cuando alguien edita
+// manualmente la columna ESTADO).
+function reorderAndBorder_(sheet) {
+  const FILA_INICIO = 3;       // Los datos empiezan en la fila 3 (1=encabezado, 2=título?)
+  const ULTIMA_COL = 8;        // Hasta H (Observaciones)
+  const COL_ESTADO_IDX = 4;    // Índice 0-based de la columna ESTADO dentro del array de fila
+
+  const ultimaFila = sheet.getLastRow();
+  if (ultimaFila < FILA_INICIO) return;
+
+  const rangoTabla = sheet.getRange(FILA_INICIO, 1, ultimaFila - FILA_INICIO + 1, ULTIMA_COL);
+
+  // 1. Columna temporal de prioridad: 2 = ENTREGADO/COMPLETO, 1 = pendiente
+  const valores = rangoTabla.getValues();
+  const prioridades = valores.map((fila) => {
+    const estado = fila[COL_ESTADO_IDX];
+    return [(estado === 'ENTREGADO' || estado === 'COMPLETO') ? 2 : 1];
+  });
+
+  const COL_TEMP = 10;
+  sheet.getRange(FILA_INICIO, COL_TEMP, prioridades.length).setValues(prioridades);
+
+  // 2. Ordena por la columna temporal y la limpia
+  rangoTabla.offset(0, 0, prioridades.length, COL_TEMP)
+            .sort({ column: COL_TEMP, ascending: true });
+  sheet.getRange(FILA_INICIO, COL_TEMP, prioridades.length).clearContent();
+
+  // 3. Borde fino divisorio en todas las filas
+  rangoTabla.setBorder(null, null, true, null, null, null, '#b7b7b7', SpreadsheetApp.BorderStyle.SOLID);
+
+  // 4. Borde grueso entre la última pendiente y la primera entregada
+  const nuevos = rangoTabla.getValues();
+  let filaParaBorde = -1;
+  for (let i = 0; i < nuevos.length - 1; i++) {
+    const actual    = nuevos[i][COL_ESTADO_IDX];
+    const siguiente = nuevos[i + 1][COL_ESTADO_IDX];
+    const esPendiente    = !(actual    === 'ENTREGADO' || actual    === 'COMPLETO');
+    const esEntregadoSig =  (siguiente === 'ENTREGADO' || siguiente === 'COMPLETO');
+    if (esPendiente && esEntregadoSig) {
+      filaParaBorde = i + FILA_INICIO;
+      break;
+    }
+  }
+  if (filaParaBorde !== -1) {
+    sheet.getRange(filaParaBorde, 1, 1, ULTIMA_COL)
+         .setBorder(null, null, true, null, null, null, 'black', SpreadsheetApp.BorderStyle.SOLID_THICK);
+  }
+}
+
+// Trigger nativo de Google Sheets: se dispara cuando un humano edita la hoja.
+// Reusa la misma función de reorden que llaman appendRow/updateRow.
+function onEdit(e) {
+  if (!e || !e.range) return;
+  const sheet = e.source.getActiveSheet();
+  if (sheet.getName() !== SHEET_NAME) return;
+
+  // Solo reordenar si se editó la columna ESTADO en una fila de datos.
+  const COL_ESTADO_1BASED = 5;
+  const FILA_INICIO = 3;
+  if (e.range.getColumn() !== COL_ESTADO_1BASED) return;
+  if (e.range.getRow() < FILA_INICIO) return;
+
+  reorderAndBorder_(sheet);
+  e.range.activate();
 }
 
 // Lee filas de la hoja con filtros opcionales (date, name, status).
