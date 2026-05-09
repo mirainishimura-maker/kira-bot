@@ -1,30 +1,44 @@
-// Cliente HTTP de la hoja de productividad de Luisa.
+// Cliente HTTP de la hoja de productividad de Luisa (v2).
 // El backend es un Apps Script desplegado como Web App (ver appsscript/Code.gs).
+//
+// Esquema v2 — 11 columnas:
+//   fecha | responsable | area | clienteMarca | tarea | tipo | prioridad |
+//   estado | fechaCompromiso | diasAtraso (fórmula) | observaciones
 
 import { config } from '../config.js';
 
+// ─── Mapeos semánticos ────────────────────────────────────────────────
+
+// Rol del miembro → área tal como aparece en la hoja v2.
+// Si el rol no está en este mapa, se devuelve el rol crudo en mayúscula
+// inicial (mejor que vacío).
 const ROLE_TO_AREA = {
-  project_manager:  'PM',
-  leader:           'LIDER',
-  content_creator:  'CREADOR DE CONT',
-  pautero:          'PAUTA',
-  videographer:     'VIDEOGRAFO',
-  designer:         'DISEÑO',
+  project_manager: 'PM',
+  leader:          'Liderazgo',
+  content_creator: 'Creación de Contenido',
+  pautero:         'Pauta',
+  videographer:    'Videografía',
+  designer:        'Diseño',
 };
 
+// Estados con emoji exactamente como los acepta la hoja v2.
 const STATUS_TO_ESTADO = {
-  done:        'ENTREGADO',
-  in_progress: 'EN PROCESO',
-  blocked:     'BLOQUEADO',
-  pending:     'POR REALIZAR',
+  done:        '✅ Entregado',
+  not_done:    '❌ No entregado',
+  in_progress: '🔄 En proceso',
+  pending:     '⬜ Por realizar',
+  blocked:     '⏸️ Bloqueado',
 };
 
+// Prioridades con emoji.
 const PRIORITY_TO_LABEL = {
-  urgent: 'URGENTE',
-  high:   'ALTA',
-  normal: 'NORMAL',
-  low:    'BAJA',
+  urgent: '🔴 Urgente',
+  high:   '🟡 Alta',
+  normal: '🔵 Normal',
+  low:    '🟢 Baja',
 };
+
+// ─── HTTP ─────────────────────────────────────────────────────────────
 
 function isEnabled() {
   return Boolean(config.sheets?.url && config.sheets?.secret);
@@ -51,47 +65,63 @@ async function call(action, payload) {
   return { ok: true, data };
 }
 
+// ─── Public API ───────────────────────────────────────────────────────
+
 export function ping() {
   return call('ping', {});
 }
 
-// Convierte fecha a formato dd/mm que usa la hoja de Luisa.
+// Convierte fecha a formato dd/mm/yyyy que usa la hoja v2.
 export function todayLabel(d = new Date()) {
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  return `${dd}/${mm}`;
+  const dd   = String(d.getDate()).padStart(2, '0');
+  const mm   = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
 }
 
-// Mapea un miembro de la BD al "AREA" que usa la hoja.
 export function memberToArea(member) {
-  if (!member) return '';
-  return ROLE_TO_AREA[member.role] ?? member.role.toUpperCase();
+  if (!member?.role) return '';
+  return ROLE_TO_AREA[member.role] ?? member.role;
+}
+
+export function statusLabel(status) {
+  return STATUS_TO_ESTADO[status] ?? '';
+}
+
+export function priorityLabel(priority) {
+  return PRIORITY_TO_LABEL[priority] ?? '';
 }
 
 // Agrega una fila al final.
 export function appendDailyEntry({
-  date, name, area, pendientes, estado, prioridad, seguimiento = 'SI', observaciones = '',
+  fecha, responsable, area, clienteMarca, tarea, tipo,
+  prioridad, estado, fechaCompromiso, observaciones,
 }) {
-  return call('append', { date, name, area, pendientes, estado, prioridad, seguimiento, observaciones });
+  return call('append', {
+    fecha, responsable, area, clienteMarca, tarea, tipo,
+    prioridad, estado, fechaCompromiso, observaciones,
+  });
 }
 
-// Actualiza la fila (date,name) más reciente. Si no existe, la crea.
+// Actualiza la fila (fecha, responsable) más reciente. Si no existe, la crea.
 export function upsertDailyEntry({
-  date, name, area, pendientes, estado, prioridad, seguimiento, observaciones,
+  fecha, responsable, area, clienteMarca, tarea, tipo,
+  prioridad, estado, fechaCompromiso, observaciones,
 }) {
-  return call('update', { date, name, area, pendientes, estado, prioridad, seguimiento, observaciones });
+  return call('update', {
+    fecha, responsable, area, clienteMarca, tarea, tipo,
+    prioridad, estado, fechaCompromiso, observaciones,
+  });
 }
 
-// Lee filas de la hoja con filtros opcionales. Devuelve {ok, rows, count}.
-// Filtros: date (exacto dd/mm), name (substring case-insensitive), status (exacto).
-export function readEntries({ date, name, status, limit } = {}) {
-  return call('read', { date, name, status, limit });
+// Lee filas con filtros opcionales. Devuelve {ok, rows, count}.
+// Filtros: fecha (exacta dd/mm/yyyy), responsable / clienteMarca / estado
+// (substring case-insensitive), limit (max 200).
+export function readEntries({ fecha, responsable, clienteMarca, estado, limit } = {}) {
+  return call('read', { fecha, responsable, clienteMarca, estado, limit });
 }
 
-// Helpers para que el resto del bot no sepa de strings de Excel.
-export function statusLabel(status) {
-  return STATUS_TO_ESTADO[status] ?? '';
-}
-export function priorityLabel(priority) {
-  return PRIORITY_TO_LABEL[priority] ?? '';
+// Devuelve métricas agregadas por persona y la lista de tareas con atraso.
+export function summarize({ responsable } = {}) {
+  return call('summary', { responsable });
 }

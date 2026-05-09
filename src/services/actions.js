@@ -1,5 +1,5 @@
 // Ejecutor de las "actions" que GPT emite en su JSON.
-// Hoy solo está implementado log_to_sheet (escribe en la hoja de productividad
+// Hoy solo está implementado log_to_sheet (escribe en la hoja v2 de productividad
 // de Luisa via Apps Script). El resto se loggea como pendiente para Fase 3.
 
 import { listActiveMembers } from './members.js';
@@ -25,16 +25,18 @@ export async function executeActions(actions, ctx = {}) {
 
 async function runLogToSheet(action, ctx) {
   const data = action?.data ?? {};
-  const requestedName = (data.name ?? ctx.sender?.name ?? '').trim();
-  const pendientes = (data.pendientes ?? '').trim();
 
-  if (!requestedName || !pendientes) {
-    console.warn('[actions] log_to_sheet sin name o pendientes:', JSON.stringify(action));
+  // El campo principal antes se llamaba "pendientes"; la v2 lo llama "tarea".
+  // Aceptamos ambos nombres por si GPT usa el viejo (durante la migración).
+  const tarea = (data.tarea ?? data.pendientes ?? '').trim();
+  const requestedName = (data.responsable ?? data.name ?? ctx.sender?.name ?? '').trim();
+
+  if (!requestedName || !tarea) {
+    console.warn('[actions] log_to_sheet sin responsable o tarea:', JSON.stringify(action));
     return;
   }
 
   // Resolvemos al miembro canónico para evitar typos / acentos en la hoja.
-  // (Luisa tiene inconsistencias históricas — KIRA escribe siempre la versión correcta.)
   const members = await listActiveMembers();
   const lower = requestedName.toLowerCase();
   const canonical =
@@ -42,26 +44,29 @@ async function runLogToSheet(action, ctx) {
     members.find((m) => m.name.toLowerCase().startsWith(lower)) ??
     members.find((m) => m.name.toLowerCase().includes(lower));
 
-  const finalName = canonical?.name ?? requestedName;
-  const area = data.area || memberToArea(canonical) || requestedName.toUpperCase();
+  const responsable = canonical?.name ?? requestedName;
+  const area = data.area || memberToArea(canonical);
 
-  const estado    = data.estado    || statusLabel(data.status)     || 'EN PROCESO';
-  const prioridad = data.prioridad || priorityLabel(data.priority) || 'NORMAL';
+  // Estado y prioridad: aceptamos keywords (preferido) o el string literal.
+  const estado    = data.estado    || statusLabel(data.status)     || '';
+  const prioridad = data.prioridad || priorityLabel(data.priority) || '';
 
   const result = await upsertDailyEntry({
-    date:          data.date || todayLabel(),
-    name:          finalName,
+    fecha:           data.fecha || todayLabel(),
+    responsable,
     area,
-    pendientes,
-    estado,
+    clienteMarca:    data.clienteMarca ?? data.cliente ?? '',
+    tarea,
+    tipo:            data.tipo ?? '',
     prioridad,
-    seguimiento:   data.seguimiento || 'SI',
-    observaciones: data.observaciones ?? '',
+    estado,
+    fechaCompromiso: data.fechaCompromiso ?? '',
+    observaciones:   data.observaciones ?? '',
   });
 
   if (!result.ok) {
     console.error('[actions] log_to_sheet fallo:', result);
     return;
   }
-  console.log(`[actions] log_to_sheet ✓ ${finalName} | ${pendientes.slice(0, 60)}`);
+  console.log(`[actions] log_to_sheet ✓ ${responsable} | ${tarea.slice(0, 60)}`);
 }

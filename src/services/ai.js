@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
 import { openai, MODEL } from '../lib/openai.js';
-import { readEntries, todayLabel } from './sheets.js';
+import { readEntries, summarize, todayLabel } from './sheets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT = readFileSync(
@@ -21,31 +21,55 @@ const TOOLS = [
     function: {
       name: 'read_sheet',
       description:
-        'Lee filas de la hoja de productividad de Luisa. Úsala cuando alguien te pida ver pendientes, ' +
-        'tareas asignadas, qué entregó alguien, qué hay en proceso, etc. Filtra por fecha, nombre o estado. ' +
-        'Sin filtros devuelve las últimas 50 filas (las más recientes primero). La fecha de hoy es ' +
-        '"' + todayLabel() + '" (formato dd/mm).',
+        'Lee filas de la hoja "SEGUIMIENTO MKT HUB v2.0" (Registro Diario). Úsala cuando alguien pida ver ' +
+        'pendientes, tareas asignadas, qué entregó alguien, qué hay en proceso o bloqueado, qué hay por cliente, etc. ' +
+        'Filtra por cualquier combinación de fecha, responsable, cliente o estado. Sin filtros devuelve las últimas ' +
+        '50 filas (las más recientes primero). La fecha de hoy es "' + todayLabel() + '" (formato dd/mm/yyyy).',
       parameters: {
         type: 'object',
         properties: {
-          date: {
+          fecha: {
             type: 'string',
-            description: 'Fecha exacta en formato dd/mm (ej: "08/05"). Omite para no filtrar por fecha.',
+            description: 'Fecha exacta en formato dd/mm/yyyy (ej: "08/05/2026"). Omite para no filtrar.',
           },
-          name: {
+          responsable: {
             type: 'string',
             description: 'Nombre o substring del miembro (ej: "Piero", "analu"). Case-insensitive, coincidencia parcial.',
           },
-          status: {
+          clienteMarca: {
             type: 'string',
-            enum: ['ENTREGADO', 'EN PROCESO', 'BLOQUEADO', 'POR REALIZAR'],
-            description: 'Estado exacto. Omite para no filtrar.',
+            description: 'Cliente/marca o substring (ej: "Eco", "Itaca", "Arta"). Case-insensitive.',
+          },
+          estado: {
+            type: 'string',
+            description: 'Substring del estado: "Entregado" | "No entregado" | "En proceso" | "Por realizar" | "Bloqueado". Case-insensitive.',
           },
           limit: {
             type: 'integer',
             description: 'Máximo de filas (default 50, max 200).',
             minimum: 1,
             maximum: 200,
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'summarize_team',
+      description:
+        'Devuelve métricas agregadas: totales por persona (entregadas, en proceso, por realizar, bloqueadas, ' +
+        'tasa de cumplimiento) y la lista de tareas atrasadas ordenadas por días de atraso. Úsala para resúmenes ' +
+        'ejecutivos a Luisa o Astrid, reportes vespertinos en grupo, o cuando alguien pida "el panorama" / ' +
+        '"cómo va la semana" / "quién está más cargado".',
+      parameters: {
+        type: 'object',
+        properties: {
+          responsable: {
+            type: 'string',
+            description: 'Si quieres métricas de una sola persona, pasa su nombre o substring. Omite para resumen global.',
           },
         },
         additionalProperties: false,
@@ -62,6 +86,18 @@ async function executeTool(name, args) {
       return { ok: false, error: 'No pude leer la hoja en este momento.' };
     }
     return { ok: true, rows: result.data?.rows ?? [], count: result.data?.count ?? 0 };
+  }
+  if (name === 'summarize_team') {
+    const result = await summarize(args ?? {});
+    if (!result.ok) {
+      return { ok: false, error: 'No pude calcular el resumen en este momento.' };
+    }
+    return {
+      ok: true,
+      global:          result.data?.global          ?? {},
+      porPersona:      result.data?.porPersona      ?? {},
+      tareasAtrasadas: result.data?.tareasAtrasadas ?? [],
+    };
   }
   return { ok: false, error: `Tool desconocida: ${name}` };
 }
