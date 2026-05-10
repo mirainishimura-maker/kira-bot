@@ -63,13 +63,16 @@ export async function callSpaceEndpoint(space, action, payload = {}) {
   if (!space?.sheet_url || !space?.sheet_secret) {
     throw new Error(`Espacio "${space?.slug}" no tiene sheet_url/sheet_secret configurados.`);
   }
+  const body = JSON.stringify({ secret: space.sheet_secret, action, ...payload });
+  console.log(`[spaces] → POST ${space.slug} action=${action} url=${space.sheet_url.slice(0, 80)}... bodyLen=${body.length}`);
   const res = await fetch(space.sheet_url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ secret: space.sheet_secret, action, ...payload }),
+    body,
     redirect: 'follow',
   });
   const text = await res.text();
+  console.log(`[spaces] ← ${space.slug} action=${action} status=${res.status} finalUrl=${(res.url || '').slice(0, 80)}... bodyPreview=${text.slice(0, 200)}`);
   let data;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
   // Si el response no es JSON parseable, treat as error — Apps Script devuelve
