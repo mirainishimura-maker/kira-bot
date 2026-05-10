@@ -4,6 +4,9 @@ import { handleWebhook } from './webhook/evolution.js';
 import { startCrons } from './services/crons.js';
 import { runBirthdayCron } from './services/birthdays.js';
 import { runMiraiOpsCron } from './services/ops.js';
+import { findMemberByPhone } from './services/members.js';
+import { getMemberSpaceSlugs } from './services/spaces.js';
+import { ask } from './services/ai.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -30,6 +33,38 @@ app.post('/admin/cron/:name', async (req, res) => {
     res.json({ ok: true, dry, result });
   } catch (err) {
     console.error('[admin] cron falló:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Simula una conversación con KIRA sin pasar por WhatsApp/Evolution.
+// Body: { phone, message, channel? }. Devuelve el JSON crudo que produjo GPT
+// (messages/actions/alerts). NO envía mensajes reales ni guarda en memoria.
+// Las tools que escriben en hojas SÍ se ejecutan (mirai_ops append/update).
+app.post('/admin/ask', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  const { phone, message, channel = 'private' } = req.body ?? {};
+  if (!phone || !message) {
+    return res.status(400).json({ ok: false, error: 'faltan phone o message' });
+  }
+  try {
+    const member = await findMemberByPhone(phone);
+    if (!member) return res.status(404).json({ ok: false, error: `no hay miembro con phone=${phone}` });
+    const memberSpaces = await getMemberSpaceSlugs(member.id);
+    const spaceSlug = (channel === 'private' && memberSpaces.includes('mirai_ops'))
+      ? 'mirai_ops'
+      : 'mkt';
+    const result = await ask({
+      member,
+      channel,
+      message,
+      context: { activeTasks: [], recentMemory: [], spaceSlug },
+    });
+    res.json({ ok: true, member: { name: member.name, role: member.role }, memberSpaces, spaceSlug, result });
+  } catch (err) {
+    console.error('[admin/ask] falló:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
