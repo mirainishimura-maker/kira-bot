@@ -15,6 +15,14 @@
 //   col 17  HORARIOS OLIVOS
 //
 // Niños y adultos. Filtra fechas absurdas.
+//
+// CÓMO INSTALAR: proyecto Apps Script STANDALONE (no bound). Razón: esta hoja
+// ya tiene un Apps Script bound (la web app de asistencia Ítaca Kids Lima).
+//   1. https://script.google.com/home → New project.
+//   2. Pegar TODO este archivo en Code.gs.
+//   3. Propiedades del script → KIRA_SECRET = <secret> (correr generateSecret()).
+//   4. Deploy → New deployment → Web app → Execute as Me, Anyone access.
+//   5. Copiar la URL → guardarla en spaces.sheet_url.
 // =====================================================================
 
 const COL = {
@@ -26,6 +34,9 @@ const COL = {
   horariosOlivos:     17,
 };
 
+// Standalone Apps Script (no bound). Leemos la hoja por ID para no chocar con
+// el Apps Script de la asistencia Ítaca Kids Lima, que ya está bound a esta hoja.
+const SHEET_ID  = '1M4TbRUHT9ddbwKzJWa3SuwRkI2FpIWctHXxG7eJwWr0';
 const SHEET_GID = 843706539;
 const DATA_START_ROW = 2;
 
@@ -102,7 +113,7 @@ function formatSede_(raw) {
 }
 
 function getSheet_() {
-  const sheets = SpreadsheetApp.getActive().getSheets();
+  const sheets = SpreadsheetApp.openById(SHEET_ID).getSheets();
   for (let i = 0; i < sheets.length; i++) {
     if (sheets[i].getSheetId() === SHEET_GID) return sheets[i];
   }
@@ -142,4 +153,22 @@ function testToday() {
     action: 'birthdaysToday',
   })}};
   Logger.log(doPost(e).getContent());
+}
+
+// Corré esta función desde el editor (no necesita redeploy) para ver qué
+// está leyendo realmente el script: cuántas filas, y muestra de las primeras 5.
+function debugSheet() {
+  const sheet = getSheet_();
+  const lastRow = sheet.getLastRow();
+  Logger.log('Pestaña: ' + sheet.getName() + ' | GID: ' + sheet.getSheetId());
+  Logger.log('Total filas (incluida header): ' + lastRow);
+  if (lastRow < DATA_START_ROW) { Logger.log('Sin datos'); return; }
+  const numRows = Math.min(5, lastRow - DATA_START_ROW + 1);
+  const rows = sheet.getRange(DATA_START_ROW, 1, numRows, COL.horariosOlivos).getDisplayValues();
+  rows.forEach((r, i) => {
+    Logger.log('Fila ' + (DATA_START_ROW + i) + ' → apoderado=[' + r[COL.apoderado - 1] +
+               '] participante=[' + r[COL.participante - 1] +
+               '] fechaNac=[' + r[COL.fechaNacimiento - 1] +
+               '] sede=[' + r[COL.sede - 1] + ']');
+  });
 }

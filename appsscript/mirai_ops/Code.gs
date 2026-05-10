@@ -1,7 +1,7 @@
 // =====================================================================
 // KIRA — Apps Script: Mirai Ops (agenda operativa multi-proyecto)
 // =====================================================================
-// Hoja: 1oz20T0uk0Oo1hHmqW44O2dNiOMSFXlJ5vMz8fEknfpo  ("KIRA — Mirai Ops")
+// Hoja: 1tjs9m-RCKlNP0JAySfeACjXOli7gFD-7X6_-RkgJsIM  ("KIRA — Mirai Ops")
 // Pestaña: "Tareas" (la creamos con setupSheet()).
 //
 // Estructura — 9 columnas:

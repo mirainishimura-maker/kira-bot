@@ -17,8 +17,13 @@
 // Sede: siempre "Piura". Niños y adultos.
 // Filtra fechas absurdas (1/1/0001, 10/10/0010, etc).
 //
-// CÓMO INSTALAR: igual que el de Piura — pegar en el Apps Script bound a la hoja,
-// configurar KIRA_SECRET, deploy.
+// CÓMO INSTALAR: proyecto Apps Script STANDALONE (no bound). Razón: esta hoja
+// ya tiene un Apps Script bound (la web app de asistencia ECO v2). No mezclamos.
+//   1. https://script.google.com/home → New project.
+//   2. Pegar TODO este archivo en Code.gs.
+//   3. Propiedades del script → KIRA_SECRET = <secret> (correr generateSecret()).
+//   4. Deploy → New deployment → Web app → Execute as Me, Anyone access.
+//   5. Copiar la URL → guardarla en spaces.sheet_url.
 // =====================================================================
 
 const COL = {
@@ -29,6 +34,9 @@ const COL = {
   fechaNacimiento:     10,
 };
 
+// Standalone Apps Script (no bound). Leemos la hoja por ID para evitar
+// chocar con el Apps Script de asistencia v2 que ya está bound a esta hoja.
+const SHEET_ID   = '1VHuI-2i02wQIbx1QqyR7sSDWHnE-Kz0hsaLGVILbPQE';
 const SHEET_GID  = 1279011654;
 const SEDE_FIJA  = 'Piura';
 const DATA_START_ROW = 2;
@@ -94,7 +102,7 @@ function handleBirthdaysToday_(body) {
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function getSheet_() {
-  const sheets = SpreadsheetApp.getActive().getSheets();
+  const sheets = SpreadsheetApp.openById(SHEET_ID).getSheets();
   for (let i = 0; i < sheets.length; i++) {
     if (sheets[i].getSheetId() === SHEET_GID) return sheets[i];
   }
