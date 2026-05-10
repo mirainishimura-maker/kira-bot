@@ -4,10 +4,15 @@ import { dirname, resolve } from 'node:path';
 
 import { openai, MODEL } from '../lib/openai.js';
 import { readEntries, summarize, todayLabel } from './sheets.js';
+import { MIRAI_OPS_TOOLS, executeMiraiOpsTool, isMiraiOpsTool } from './aiMiraiOps.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const SYSTEM_PROMPT = readFileSync(
+const MKT_SYSTEM_PROMPT = readFileSync(
   resolve(__dirname, '../prompts/system.txt'),
+  'utf8',
+);
+const MIRAI_OPS_SYSTEM_PROMPT = readFileSync(
+  resolve(__dirname, '../prompts/mirai_ops.txt'),
   'utf8',
 );
 
@@ -15,7 +20,7 @@ const MAX_TOOL_ROUNDS = 4;
 
 // Tools que GPT puede llamar durante una respuesta. Cada vez que GPT pide una
 // tool, la ejecutamos y le devolvemos el resultado para que pueda continuar.
-const TOOLS = [
+const MKT_TOOLS = [
   {
     type: 'function',
     function: {
@@ -78,8 +83,12 @@ const TOOLS = [
   },
 ];
 
-// Despachador de tools. Si agregas una nueva tool en TOOLS, agrega su handler aquí.
+// Despachador de tools. Primero verifica si la tool es del espacio mirai_ops;
+// si no, aplica las tools del espacio mkt.
 async function executeTool(name, args) {
+  if (isMiraiOpsTool(name)) {
+    return executeMiraiOpsTool(name, args);
+  }
   if (name === 'read_sheet') {
     const result = await readEntries(args ?? {});
     if (!result.ok) {
@@ -102,14 +111,25 @@ async function executeTool(name, args) {
   return { ok: false, error: `Tool desconocida: ${name}` };
 }
 
+// Selecciona el system prompt y el set de tools según el espacio activo.
+// Default = mkt. Si el webhook detectó que es conversación privada y el
+// miembro pertenece al espacio mirai_ops, usa el contexto personal.
+function selectContext(spaceSlug) {
+  if (spaceSlug === 'mirai_ops') {
+    return { systemPrompt: MIRAI_OPS_SYSTEM_PROMPT, tools: MIRAI_OPS_TOOLS };
+  }
+  return { systemPrompt: MKT_SYSTEM_PROMPT, tools: MKT_TOOLS };
+}
+
 // Llama a GPT-4.1 con el system prompt + contexto + mensaje. Si GPT decide
 // llamar a tools, las ejecutamos y volvemos a llamarlo hasta que responda con
 // el JSON estructurado de KIRA (messages / actions / alerts).
 export async function ask({ member, channel, message, context }) {
+  const { systemPrompt, tools } = selectContext(context?.spaceSlug);
   const userBlock = buildUserBlock({ member, channel, message, context });
 
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     { role: 'user',   content: userBlock },
   ];
 
@@ -117,7 +137,7 @@ export async function ask({ member, channel, message, context }) {
     const completion = await openai.chat.completions.create({
       model: MODEL,
       messages,
-      tools: TOOLS,
+      tools,
       tool_choice: 'auto',
       temperature: 0.4,
     });

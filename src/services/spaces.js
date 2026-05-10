@@ -29,6 +29,21 @@ export async function getSpaceBySlug(slug) {
   return data;
 }
 
+// Devuelve los slugs de los espacios a los que pertenece un miembro.
+// Útil para el ruteo: definir qué SYSTEM_PROMPT y tools usar según el espacio.
+export async function getMemberSpaceSlugs(memberId) {
+  if (!memberId) return [];
+  const { data, error } = await supabase
+    .from('space_members')
+    .select('spaces(slug, is_active)')
+    .eq('member_id', memberId);
+  if (error) throw error;
+  return (data ?? [])
+    .map(r => r.spaces)
+    .filter(s => s && s.is_active)
+    .map(s => s.slug);
+}
+
 // Devuelve el owner (is_owner=true) más reciente de un espacio.
 // Para birthday_reminders y personal_ops hay un solo owner.
 export async function getSpaceOwner(spaceId) {

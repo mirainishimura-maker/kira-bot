@@ -12,6 +12,7 @@ import { recentMemory, saveMemory, activeTasks } from '../services/memory.js';
 import { ask } from '../services/ai.js';
 import { executeActions } from '../services/actions.js';
 import { sendText } from '../lib/evolution.js';
+import { getMemberSpaceSlugs } from '../services/spaces.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -93,16 +94,25 @@ async function processMessage(data) {
 
   console.log(`[webhook] ${channel} | ${member.name}: ${text.slice(0, 80)}`);
 
-  const [tasks, memory] = await Promise.all([
+  const [tasks, memory, memberSpaces] = await Promise.all([
     activeTasks(member.id),
     recentMemory(member.id, 5),
+    getMemberSpaceSlugs(member.id),
   ]);
+
+  // Ruteo de espacio: en privado, si el miembro pertenece a mirai_ops, usamos
+  // ese contexto (prompt + tools personales). En grupo o si no pertenece a
+  // mirai_ops, default a mkt.
+  const spaceSlug = (channel === CHANNEL_PRIVATE && memberSpaces.includes('mirai_ops'))
+    ? 'mirai_ops'
+    : 'mkt';
+  console.log(`[webhook] espacio activo: ${spaceSlug} (miembro en: ${memberSpaces.join(',') || 'ninguno'})`);
 
   const result = await ask({
     member,
     channel,
     message: text,
-    context: { activeTasks: tasks, recentMemory: memory },
+    context: { activeTasks: tasks, recentMemory: memory, spaceSlug },
   });
 
   const senderJid = channel === CHANNEL_GROUP ? matchedJid : remoteJid;
