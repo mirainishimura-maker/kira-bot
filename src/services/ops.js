@@ -29,7 +29,7 @@ export function formatOpsMessage(tasks) {
   return [header, '', ...tasks.map(t => '• ' + formatTaskLine(t))].join('\n');
 }
 
-export async function runMiraiOpsCron() {
+export async function runMiraiOpsCron({ dry = false } = {}) {
   const space = await getSpaceBySlug('mirai_ops');
   if (!space) {
     console.warn('[ops] espacio mirai_ops no encontrado');
@@ -44,6 +44,10 @@ export async function runMiraiOpsCron() {
     const data = await callSpaceEndpoint(space, 'tasksToday');
     const tasks = data.tasks ?? [];
     const text = formatOpsMessage(tasks);
+    if (dry) {
+      console.log(`[ops][DRY] mirai_ops → ${owner.name} (${owner.phone}):\n${text}`);
+      return { sent: false, count: tasks.length, dry: true, preview: text, to: owner.phone };
+    }
     await sendPrivate(owner.phone, text);
     console.log(`[ops] mirai_ops | sent=true count=${tasks.length}`);
     return { sent: true, count: tasks.length };

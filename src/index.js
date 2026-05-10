@@ -16,16 +16,18 @@ app.post('/webhook', handleWebhook);
 
 // Trigger manual de crons. Protegido por WEBHOOK_SECRET (header x-admin-secret).
 // Útil para probar sin esperar a las 7/8 AM y para volver a disparar si falló.
+// Query param ?dry=true → formatea y loguea pero NO envía mensajes reales.
 app.post('/admin/cron/:name', async (req, res) => {
   if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
     return res.status(401).json({ ok: false, error: 'unauthorized' });
   }
+  const dry = req.query.dry === 'true' || req.query.dry === '1';
   try {
     let result;
-    if (req.params.name === 'birthdays')      result = await runBirthdayCron();
-    else if (req.params.name === 'mirai_ops') result = await runMiraiOpsCron();
+    if (req.params.name === 'birthdays')      result = await runBirthdayCron({ dry });
+    else if (req.params.name === 'mirai_ops') result = await runMiraiOpsCron({ dry });
     else return res.status(404).json({ ok: false, error: 'unknown cron' });
-    res.json({ ok: true, result });
+    res.json({ ok: true, dry, result });
   } catch (err) {
     console.error('[admin] cron falló:', err);
     res.status(500).json({ ok: false, error: err.message });

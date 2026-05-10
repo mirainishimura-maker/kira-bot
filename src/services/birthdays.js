@@ -43,8 +43,8 @@ export function formatBirthdayMessage(birthdays) {
 }
 
 // Procesa un espacio de cumples: consulta el endpoint, formatea, envía DM al owner.
-// Devuelve { slug, sent: boolean, count, reason? }.
-async function processBirthdaySpace(space) {
+// Si dry=true, formatea y loguea pero no envía. Devuelve { slug, sent, count, ... }.
+async function processBirthdaySpace(space, { dry = false } = {}) {
   const result = { slug: space.slug, sent: false, count: 0 };
   try {
     const owner = await getSpaceOwner(space.id);
@@ -63,6 +63,12 @@ async function processBirthdaySpace(space) {
     }
 
     const text = formatBirthdayMessage(birthdays);
+    result.preview = text;
+    result.to      = owner.phone;
+    if (dry) {
+      console.log(`[birthdays][DRY] ${space.slug} → ${owner.name} (${owner.phone}):\n${text}`);
+      return result;
+    }
     await sendPrivate(owner.phone, text);
     result.sent = true;
     return result;
@@ -76,12 +82,12 @@ async function processBirthdaySpace(space) {
 
 // Corre los crons de cumples de todos los espacios birthday_reminders activos.
 // Cada espacio se procesa de forma aislada — un fallo no detiene a los otros.
-export async function runBirthdayCron() {
+export async function runBirthdayCron({ dry = false } = {}) {
   const spaces = await listSpacesByKind('birthday_reminders');
-  console.log(`[birthdays] cron disparado | espacios=${spaces.length}`);
+  console.log(`[birthdays] cron disparado | espacios=${spaces.length}${dry ? ' (DRY)' : ''}`);
   const results = [];
   for (const space of spaces) {
-    const r = await processBirthdaySpace(space);
+    const r = await processBirthdaySpace(space, { dry });
     results.push(r);
     console.log(`[birthdays] ${r.slug} | sent=${r.sent} count=${r.count}${r.reason ? ' ('+r.reason+')' : ''}`);
   }
