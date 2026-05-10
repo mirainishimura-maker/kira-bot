@@ -72,6 +72,17 @@ export async function callSpaceEndpoint(space, action, payload = {}) {
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  // Si el response no es JSON parseable, treat as error — Apps Script devuelve
+  // HTML cuando el redirect manda a una page de login o cuando el método
+  // termina siendo GET (porque fetch siguió un 302 cambiando POST→GET).
+  if (data.raw !== undefined) {
+    const preview = String(data.raw).slice(0, 200);
+    console.warn(`[spaces] ${space.slug} ${action} → response no-JSON (status ${res.status}, final URL ${res.url}): ${preview}`);
+    const err = new Error(`Endpoint ${space.slug} ${action} devolvió HTML/raw — el redirect probablemente cambió POST a GET.`);
+    err.status = res.status;
+    err.preview = preview;
+    throw err;
+  }
   if (!res.ok || data.ok === false) {
     const err = new Error(`Endpoint ${space.slug} ${action} -> ${res.status}: ${JSON.stringify(data)}`);
     err.status = res.status;
