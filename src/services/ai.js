@@ -192,6 +192,12 @@ function parseFinalResponse(content) {
 function buildUserBlock({ member, channel, message, context }) {
   const lines = [];
   lines.push(`# Mensaje recibido`);
+  const today = new Date();
+  const dd   = String(today.getDate()).padStart(2, '0');
+  const mm   = String(today.getMonth() + 1).padStart(2, '0');
+  const yyyy = today.getFullYear();
+  const diaSemana = today.toLocaleDateString('es-PE', { weekday: 'long', timeZone: 'America/Lima' });
+  lines.push(`Hoy es: ${diaSemana} ${dd}/${mm}/${yyyy} (TZ America/Lima)`);
   lines.push(`Canal: ${channel}`);
   if (member) {
     lines.push(`De: ${member.name} (${member.role}${member.is_admin ? ', admin' : ''}) — tel ${member.phone ?? '(sin tel)'}`);
