@@ -3,16 +3,15 @@
 import { callSpaceEndpoint, getSpaceOwner, listSpacesByKind } from './spaces.js';
 import { sendPrivate } from '../lib/evolution.js';
 
-// Formato del bloque principal:
-//   🎂 Hoy cumple <Nombre> (<edad> años)
-//   📍 <sede> · <grupo>
-//   👤 Apoderado: <apoderado>
-// Reglas:
+// Reglas de formato:
 //   - Si edad está vacía, no se imprime "(N años)".
-//   - Si grupo está vacío, sólo "📍 <sede>".
+//   - Si grupo está vacío, no se imprime el "· grupo".
 //   - Si apoderado coincide con el nombre del participante (caso adulto que
-//     se inscribió a sí mismo), se omite la línea de apoderado.
-function formatBirthday(b) {
+//     se inscribió a sí mismo), se omite la mención al apoderado.
+// 1 cumple → bloque destacado de 2-3 líneas.
+// >1 cumples → header con conteo + lista compacta de una línea por persona.
+
+function formatBirthdayBlock(b) {
   const nombre = (b.nombre || '').trim();
   const edad   = (b.edad   || '').trim();
   const sede   = (b.sede   || '').trim();
@@ -28,18 +27,34 @@ function formatBirthday(b) {
   return lines.join('\n');
 }
 
+function formatBirthdayLine(b) {
+  const nombre = (b.nombre || '').trim();
+  const edad   = (b.edad   || '').trim();
+  const sede   = (b.sede   || '').trim();
+  const grupo  = (b.grupo  || '').trim();
+  const apoderado = (b.apoderado || '').trim();
+
+  let head = nombre;
+  if (edad) head += ` (${edad} años)`;
+
+  const sedeBlock = grupo ? `${sede} · ${grupo}` : sede;
+  const parts = [head];
+  if (sedeBlock) parts.push(sedeBlock);
+  if (apoderado && apoderado.toLowerCase() !== nombre.toLowerCase()) {
+    parts.push(apoderado);
+  }
+  return parts.join(' — ');
+}
+
 export function formatBirthdayMessage(birthdays) {
   if (!birthdays?.length) return null;
-  const [first, ...rest] = birthdays;
-  const parts = [formatBirthday(first)];
-  if (rest.length) {
-    parts.push('\nTambién hoy:');
-    for (const b of rest) {
-      parts.push('- ' + formatBirthday(b).replace(/\n/g, '\n  '));
-    }
+  if (birthdays.length === 1) {
+    return formatBirthdayBlock(birthdays[0]) + '\n\nAcuérdate del flyer 🎨';
   }
-  parts.push('\nAcuérdate del flyer 🎨');
-  return parts.join('\n');
+  const lines = [`🎂 Hoy cumplen ${birthdays.length} personas:`, ''];
+  for (const b of birthdays) lines.push('• ' + formatBirthdayLine(b));
+  lines.push('', 'Acuérdate del flyer 🎨');
+  return lines.join('\n');
 }
 
 // Procesa un espacio de cumples: consulta el endpoint, formatea, envía DM al owner.
