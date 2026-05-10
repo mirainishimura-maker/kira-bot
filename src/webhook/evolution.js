@@ -84,6 +84,13 @@ async function processMessage(data) {
     console.log(`[webhook] usado JID alterno (${matchedJid}) en lugar del primero`);
   }
 
+  // Owners de espacios unidireccionales (Mattias/Piura, Diana/Lima): reciben
+  // crons pero KIRA no entabla conversación. Si responden, se ignora en silencio.
+  if (member.role === 'owner') {
+    console.log(`[webhook] ignorando mensaje de owner ${member.name} (${phone}) — espacio unidireccional`);
+    return;
+  }
+
   console.log(`[webhook] ${channel} | ${member.name}: ${text.slice(0, 80)}`);
 
   const [tasks, memory] = await Promise.all([
