@@ -20,6 +20,7 @@ import {
 } from '../services/mia/index.js';
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, describeImage } from '../services/mia/media.js';
+import { detectLeadNote, handleLeadIntake } from '../services/mia/leadIntake.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -88,22 +89,40 @@ async function processMessage(data) {
     if (!isAddressedToKira(text)) return;
   }
 
-  // ---- Comandos de Mia: solo desde MIRAI_PERSONAL_PHONE, en privado ----
-  if (channel === CHANNEL_PRIVATE && config.mia.enabled && text && isMiaCommand(text)) {
+  // ---- Comandos de Mia y notas de leads: solo desde MIRAI_PERSONAL_PHONE ----
+  if (channel === CHANNEL_PRIVATE && config.mia.enabled && text) {
     const senderPhone = phoneFromJid(remoteJid);
     if (senderPhone === config.mia.personalPhone) {
-      console.log(`[webhook] comando Mia desde personal de Mirai: ${text.slice(0, 80)}`);
-      try {
-        const result = await handleMiaCommand(text);
-        await dispatchMessages(result.messages, { senderJid: remoteJid });
-      } catch (err) {
-        console.error('[webhook] error procesando comando Mia:', err.message);
-        await dispatchMessages(
-          [{ channel: 'private', text: `⚠️ Error en comando: ${err.message}` }],
-          { senderJid: remoteJid },
-        );
+      // 1) Comando explícito /paciente, /pacientes, /quitar, /notas
+      if (isMiaCommand(text)) {
+        console.log(`[webhook] comando Mia desde personal de Mirai: ${text.slice(0, 80)}`);
+        try {
+          const result = await handleMiaCommand(text);
+          await dispatchMessages(result.messages, { senderJid: remoteJid });
+        } catch (err) {
+          console.error('[webhook] error procesando comando Mia:', err.message);
+          await dispatchMessages(
+            [{ channel: 'private', text: `⚠️ Error en comando: ${err.message}` }],
+            { senderJid: remoteJid },
+          );
+        }
+        return;
       }
-      return;
+      // 2) Nota de lead: texto con teléfono peruano + keyword (pcte, paciente, etc.)
+      if (detectLeadNote(text)) {
+        console.log(`[webhook] nota de lead detectada desde personal de Mirai: ${text.slice(0, 100)}`);
+        try {
+          const result = await handleLeadIntake(text);
+          if (result?.messages) await dispatchMessages(result.messages, { senderJid: remoteJid });
+        } catch (err) {
+          console.error('[webhook] error en handleLeadIntake:', err.message);
+          await dispatchMessages(
+            [{ channel: 'private', text: `⚠️ Error en intake: ${err.message}` }],
+            { senderJid: remoteJid },
+          );
+        }
+        return;
+      }
     }
   }
 
