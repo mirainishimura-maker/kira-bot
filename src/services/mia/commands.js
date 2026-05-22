@@ -13,7 +13,7 @@ import { sendText } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -40,6 +40,7 @@ export async function handleMiaCommand(text) {
     if (command === 'quitar')    return await cmdRemovePatient(rest);
     if (command === 'notas')     return await cmdAddNote(rest);
     if (command === 'atender')   return await cmdAtenderLead(rest);
+    if (command === 'retomar')   return await cmdRetomarLead(rest);
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
   }
@@ -157,6 +158,65 @@ async function cmdAddNote(rest) {
   const updated = await addNoteToPatient(phone, nota);
   if (!updated) return reply(`No encontré paciente con ese número (${normalizePhone(phone)}).`);
   return reply(`✓ Nota agregada a ${updated.nombre}.`);
+}
+
+async function cmdRetomarLead(rest) {
+  // /retomar <phone> <nombre>
+  // Para cuando ya saludaste manualmente al lead desde kiramkt antes de
+  // agregarlo. Mia lo agrega, finge que ya saludó (inserta marker en
+  // conversations) y cuando el lead responda continúa el flujo SIN
+  // reintroducirse con "Hola! Soy Mia 🌸".
+  const tokens = rest.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) {
+    return reply('Uso: /retomar <telefono> <nombre>\nEjemplo: /retomar 51931107589 Milagros Vania\n\nÚsalo cuando ya saludaste al lead manualmente y solo quieres que Mia continúe sin saludar de nuevo.');
+  }
+  const phone = tokens[0];
+  const nombre = tokens.slice(1).join(' ');
+
+  const result = await addPatient({ phone, nombre, etiqueta: 'lead_organico' });
+  const patient = result.patient;
+  if (result.duplicated) {
+    return reply(`ℹ️ ${patient.nombre} (${patient.phone}) ya estaba en la lista.`);
+  }
+
+  // Insertar 3 burbujas históricas como mensajes de Mia, para que cuando
+  // el lead responda Mia entre en Escenario B (conversación en curso).
+  const saludoHistorico = [
+    'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
+    'Recibí tu contacto para información de sesión psicológica 🤍',
+    '¿La consulta es para ti o para alguien más?',
+  ];
+  for (const burbuja of saludoHistorico) {
+    try {
+      await logMessage({
+        patientId: patient.id,
+        author: 'mia',
+        content: burbuja,
+        metadata: { kind: 'retomar_marker', note: 'saludo previo enviado manualmente fuera de Mia' },
+      });
+    } catch (err) {
+      console.warn('[mia/commands] no pude insertar marker:', err.message);
+    }
+  }
+
+  // Sheets CRM
+  try {
+    await upsertLead({
+      phone: patient.phone,
+      nombre: patient.nombre,
+      estado: 'datos_parciales',
+      etiqueta: 'lead_organico',
+      nota_interna: 'Retomado: saludo ya enviado manualmente por Mirai antes del intake.',
+    });
+  } catch (err) {
+    console.warn('[mia/commands] no pude actualizar CRM:', err.message);
+  }
+
+  return reply(
+    `✓ Retomado: ${patient.nombre} (${patient.phone}) como lead orgánico.\n` +
+    `Mia NO le envía saludo de nuevo (porque ya lo saludaste tú).\n` +
+    `Cuando responda, continúa el flujo de triage directo.`
+  );
 }
 
 function reply(text) {
