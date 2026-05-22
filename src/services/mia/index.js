@@ -16,6 +16,7 @@ import { askMia } from './ai.js';
 import { logMessage, shouldMiaBeSilent } from './conversations.js';
 import { touchPatientInteraction } from './patients.js';
 import { rememberMiaSentId } from './echoTracker.js';
+import { upsertLead } from './sheetCrm.js';
 
 export { isMiaCommand, handleMiaCommand } from './commands.js';
 export { findPatientByPhone, normalizePhone } from './patients.js';
@@ -75,6 +76,28 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
       await touchPatientInteraction(patient.id, { authorCounted: 'mia' });
     } catch (err) {
       console.error('[mia] error enviando burbuja:', err.message);
+    }
+  }
+
+  // 4c. Sheets CRM: actualizar la fila del paciente con los datos recogidos.
+  if (result.datos_lead) {
+    const dl = result.datos_lead;
+    try {
+      await upsertLead({
+        phone:              patient.phone,
+        nombre:             dl.nombre || patient.nombre,
+        estado:             dl.estado || null,
+        para_quien:         dl.para_quien || null,
+        edad:               dl.edad || null,
+        procedencia:        dl.procedencia || null,
+        motivo:             dl.motivo || null,
+        horarios_propuestos:
+          Array.isArray(dl.horarios_propuestos)
+            ? dl.horarios_propuestos.join(' | ')
+            : (dl.horarios_propuestos || null),
+      });
+    } catch (err) {
+      console.warn('[mia] no pude actualizar CRM con datos_lead:', err.message);
     }
   }
 

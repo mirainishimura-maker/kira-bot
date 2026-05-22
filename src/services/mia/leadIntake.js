@@ -18,6 +18,7 @@ import { addPatient, normalizePhone } from './patients.js';
 import { logMessage } from './conversations.js';
 import { sendText } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
+import { upsertLead } from './sheetCrm.js';
 
 // Palabras que indican "esto es un lead, no un comando ni una nota cualquiera".
 const LEAD_KEYWORDS = /\b(pcte|paciente|interesad[ao]s?|campa[ñn]a|consulta|contacto|saluda[mr]?|saludo)\b/i;
@@ -132,6 +133,19 @@ export async function handleLeadIntake(text) {
         text: `ℹ️ ${patient.nombre} (${patient.phone}) ya estaba en la lista — no le envío saludo de nuevo.`,
       }],
     };
+  }
+
+  // Sheets CRM: agregar fila inicial con el lead.
+  try {
+    await upsertLead({
+      phone: patient.phone,
+      nombre: patient.nombre,
+      estado: 'nuevo',
+      etiqueta: 'lead_campaña',
+      nota_interna: detected.rawText.slice(0, 500),
+    });
+  } catch (err) {
+    console.warn('[mia/intake] no pude actualizar CRM:', err.message);
   }
 
   // Guardar la nota original como nota privada del paciente.
