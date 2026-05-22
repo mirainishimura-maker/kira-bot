@@ -135,13 +135,11 @@ async function processMessage(data) {
         }
         return;
       }
-      // 3) Operador escribió algo que no es comando ni nota de lead.
-      // Respondemos con instrucción breve para que no quede en silencio.
+      // 3) Operador escribió algo que no es comando ni nota de lead
+      // (ej: "la paciente ya llegó", "voy a llegar tarde", "quieres café?").
+      // Silencio total — Mirai ve el mensaje en kiramkt y responde manual.
       if (isOperator) {
-        await dispatchMessages(
-          [{ channel: 'private', text: 'Hola 🌸 acá solo proceso notas de leads. Mándame el número y el nombre/datos del lead y yo me encargo de saludarlo y agregarlo.' }],
-          { senderJid: remoteJid },
-        );
+        console.log(`[webhook] operador ${senderPhone} envió mensaje no-lead — silencio.`);
         return;
       }
     }
