@@ -7,13 +7,13 @@
 //   /notas 51987654321 [texto largo]        (agrega nota privada)
 //   /atender 51987654321 Nombre             (agrega lead_organico + envía saludo de bienvenida)
 
-import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone } from './patients.js';
+import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone } from './patients.js';
 import { logMessage } from './conversations.js';
 import { sendText } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -41,6 +41,7 @@ export async function handleMiaCommand(text) {
     if (command === 'notas')     return await cmdAddNote(rest);
     if (command === 'atender')   return await cmdAtenderLead(rest);
     if (command === 'retomar')   return await cmdRetomarLead(rest);
+    if (command === 'responder') return await cmdResponderEnNombreDeLead(rest);
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
   }
@@ -217,6 +218,41 @@ async function cmdRetomarLead(rest) {
     `Mia NO le envía saludo de nuevo (porque ya lo saludaste tú).\n` +
     `Cuando responda, continúa el flujo de triage directo.`
   );
+}
+
+async function cmdResponderEnNombreDeLead(rest) {
+  // /responder <phone> <texto que el lead ya escribió>
+  // Útil cuando el lead ya respondió fuera de Mia (ej: respondió a un saludo
+  // manual que Mirai le hizo antes del intake). Mia procesa el texto como
+  // si el lead lo hubiera enviado en este momento.
+  const trimmed = rest.trim();
+  const sp = trimmed.indexOf(' ');
+  if (sp < 0) {
+    return reply('Uso: /responder <telefono> <texto>\nEjemplo: /responder 51931107589 Para mí\n\nMia procesa el texto como si el lead lo acabara de enviar.');
+  }
+  const phone = normalizePhone(trimmed.slice(0, sp));
+  const texto = trimmed.slice(sp + 1).trim();
+  if (!phone) return reply('Teléfono inválido.');
+  if (!texto) return reply('Texto vacío — copia lo que el lead te escribió.');
+
+  const patient = await findPatientByPhone(phone);
+  if (!patient) {
+    return reply(`No encontré paciente con phone ${phone}. Agrégalo primero con /atender, /retomar o /paciente.`);
+  }
+
+  // Dynamic import para evitar circular dep con index.js.
+  const { handleMiaMessage } = await import('./index.js');
+  try {
+    await handleMiaMessage({
+      patient,
+      text: texto,
+      messageId: null,
+      senderJid: `${phone}@s.whatsapp.net`,
+    });
+    return reply(`✓ Mia procesó "${texto.slice(0, 80)}" como si fuera de ${patient.nombre}.\nSu respuesta ya va a ${phone}.`);
+  } catch (err) {
+    return reply(`⚠️ Error procesando: ${err.message}`);
+  }
 }
 
 function reply(text) {
