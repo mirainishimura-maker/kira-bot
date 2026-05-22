@@ -46,12 +46,21 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
   }
 
   // 3. Llamar a Mia (OpenAI con prompt + historial).
+  const t0 = Date.now();
   console.log(`[mia] generando respuesta para ${patient.nombre}: "${text.slice(0, 80)}"`);
   const result = await askMia({ patient, message: text });
+  const elapsed = Date.now() - t0;
+  const burbujas = result?.messages?.length ?? 0;
+  console.log(`[mia] askMia OK | ${patient.nombre} | ${elapsed}ms | burbujas=${burbujas} | escalar=${result?.escalar_mirai} | crisis=${result?.crisis}`);
+  if (burbujas === 0) {
+    console.warn(`[mia] ⚠️ askMia retornó CERO burbujas para ${patient.nombre}. Fallback usado para no dejar al paciente sin respuesta.`);
+    result.messages = [{ channel: 'private', text: 'Dame un momentito, ahí te respondo 🌸' }];
+  }
 
   // 4 + 5. Enviar cada burbuja y loguearla. datos_lead se guarda solo en la
   // primera burbuja del turno (representa el snapshot tras este intercambio).
   let isFirstBubble = true;
+  let burbujasEnviadas = 0;
   for (const msg of result.messages ?? []) {
     if (!msg?.text) continue;
     try {
@@ -74,10 +83,12 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
         metadata,
       });
       await touchPatientInteraction(patient.id, { authorCounted: 'mia' });
+      burbujasEnviadas++;
     } catch (err) {
-      console.error('[mia] error enviando burbuja:', err.message);
+      console.error(`[mia] ⚠️ error enviando burbuja a ${patient.nombre}:`, err.message);
     }
   }
+  console.log(`[mia] envío completo | ${patient.nombre} | ${burbujasEnviadas}/${burbujas} burbujas enviadas`);
 
   // 4c. Sheets CRM: actualizar la fila del paciente con los datos recogidos.
   if (result.datos_lead) {
