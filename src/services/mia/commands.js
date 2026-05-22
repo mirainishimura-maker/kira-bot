@@ -5,10 +5,21 @@
 //   /pacientes                              (lista activos)
 //   /quitar 51987654321                     (marca estado='alta')
 //   /notas 51987654321 [texto largo]        (agrega nota privada)
+//   /atender 51987654321 Nombre             (agrega lead_organico + envía saludo de bienvenida)
 
 import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone } from './patients.js';
+import { logMessage } from './conversations.js';
+import { sendText } from '../../lib/evolution.js';
+import { rememberMiaSentId } from './echoTracker.js';
+import { upsertLead } from './sheetCrm.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender)\b/i;
+
+const SALUDO_ORGANICO = [
+  'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
+  'Vi tu mensaje y te quiero acompañar con la info que necesites 🤍',
+  '¿La consulta es para ti o para alguien más?',
+];
 
 export function isMiaCommand(text) {
   if (!text || typeof text !== 'string') return false;
@@ -28,10 +39,67 @@ export async function handleMiaCommand(text) {
     if (command === 'pacientes') return await cmdListPatients();
     if (command === 'quitar')    return await cmdRemovePatient(rest);
     if (command === 'notas')     return await cmdAddNote(rest);
+    if (command === 'atender')   return await cmdAtenderLead(rest);
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
   }
   return reply(`Comando desconocido: /${cmd}`);
+}
+
+async function cmdAtenderLead(rest) {
+  // Formato: /atender <phone> <nombre>
+  const tokens = rest.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) {
+    return reply('Uso: /atender <telefono> <nombre>\nEjemplo: /atender 51931107589 Milagros Vania');
+  }
+  const phone = tokens[0];
+  const nombre = tokens.slice(1).join(' ');
+
+  const result = await addPatient({ phone, nombre, etiqueta: 'lead_organico' });
+  const patient = result.patient;
+  if (result.duplicated) {
+    return reply(`ℹ️ ${patient.nombre} (${patient.phone}) ya estaba en la lista. No le mando saludo de nuevo — Mia ya está atendiéndolo cuando escriba.`);
+  }
+
+  // Sheets CRM
+  try {
+    await upsertLead({
+      phone: patient.phone,
+      nombre: patient.nombre,
+      estado: 'nuevo',
+      etiqueta: 'lead_organico',
+      nota_interna: 'Lead orgánico — escribió directo a kiramkt y Mirai lo activó manualmente.',
+    });
+  } catch (err) {
+    console.warn('[mia/commands] no pude actualizar CRM:', err.message);
+  }
+
+  // Saludo de bienvenida al lead
+  const recipientJid = `${patient.phone}@s.whatsapp.net`;
+  let enviadas = 0;
+  for (const burbuja of SALUDO_ORGANICO) {
+    try {
+      const sent = await sendText(recipientJid, burbuja);
+      const sentId = sent?.key?.id ?? null;
+      if (sentId) rememberMiaSentId(sentId);
+      await logMessage({
+        patientId: patient.id,
+        author: 'mia',
+        content: burbuja,
+        whatsappMessageId: sentId,
+        metadata: { kind: 'atender_lead_saludo' },
+      });
+      enviadas++;
+    } catch (err) {
+      console.error('[mia/commands] error enviando saludo orgánico:', err.message);
+    }
+  }
+
+  return reply(
+    `✓ Atendiendo a ${patient.nombre} (${patient.phone}) como lead orgánico.\n` +
+    `Saludo enviado: ${enviadas}/${SALUDO_ORGANICO.length} burbujas.\n` +
+    `Cuando responda, Mia toma el flujo de triage.`
+  );
 }
 
 async function cmdAddPatient(rest) {

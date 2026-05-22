@@ -21,6 +21,7 @@ import {
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, describeImage } from '../services/mia/media.js';
 import { detectLeadNote, handleLeadIntake } from '../services/mia/leadIntake.js';
+import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/organicLead.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -186,6 +187,19 @@ async function processMessage(data) {
           debounceMs: config.mia.debounceMs,
           onFlush: handleMiaMessage,
         });
+        return;
+      }
+
+      // No es paciente conocido. ¿Parece lead orgánico (keywords de consulta)?
+      // Si sí, notificar a Mirai en su personal con comando pre-armado.
+      if (text && detectOrganicLead(text)) {
+        const pushName = data?.pushName ?? null;
+        console.log(`[webhook] lead orgánico potencial | ${phone} (${pushName}) — notificando a Mirai`);
+        try {
+          await notifyMiraiAboutOrganicLead({ phone, pushName, text });
+        } catch (err) {
+          console.error('[webhook] error notificando lead orgánico:', err.message);
+        }
         return;
       }
     }
