@@ -11,7 +11,7 @@ import { findMemberByPhone, phoneFromJid } from '../services/members.js';
 import { recentMemory, saveMemory, activeTasks } from '../services/memory.js';
 import { ask } from '../services/ai.js';
 import { executeActions } from '../services/actions.js';
-import { sendText } from '../lib/evolution.js';
+import { sendText, fetchMessageMediaBase64 } from '../lib/evolution.js';
 import { getMemberSpaceSlugs } from '../services/spaces.js';
 import { config } from '../config.js';
 import {
@@ -19,6 +19,7 @@ import {
   handleMiaMessage, handleMiraiManualOutbound, isMiaSentId,
 } from '../services/mia/index.js';
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
+import { transcribeAudio, describeImage } from '../services/mia/media.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -73,11 +74,13 @@ async function processMessage(data) {
     return;
   }
 
+  // text puede ser null si llegó audio/imagen sin caption — para Mia eso se
+  // procesa más abajo via multimodalToText. Para mkt, sin texto, ignoramos.
   const text = extractText(data);
-  if (!text) return;
 
   // En grupo: solo el grupo del equipo de marketing, y solo si nos hablan.
   if (channel === CHANNEL_GROUP) {
+    if (!text) return; // mkt no procesa media en grupo
     if (!isAuthorizedGroup(remoteJid)) {
       logGroupForDiscovery(remoteJid, data?.pushName);
       return;
@@ -86,7 +89,7 @@ async function processMessage(data) {
   }
 
   // ---- Comandos de Mia: solo desde MIRAI_PERSONAL_PHONE, en privado ----
-  if (channel === CHANNEL_PRIVATE && config.mia.enabled && isMiaCommand(text)) {
+  if (channel === CHANNEL_PRIVATE && config.mia.enabled && text && isMiaCommand(text)) {
     const senderPhone = phoneFromJid(remoteJid);
     if (senderPhone === config.mia.personalPhone) {
       console.log(`[webhook] comando Mia desde personal de Mirai: ${text.slice(0, 80)}`);
@@ -130,12 +133,16 @@ async function processMessage(data) {
     if (channel === CHANNEL_PRIVATE && config.mia.enabled) {
       const patient = await findPatientByPhone(phone);
       if (patient) {
-        console.log(`[webhook] → Mia (buffer) | ${patient.nombre} (${phone}): ${text.slice(0, 80)}`);
-        // Encolar con debounce: agrupa mensajes del paciente que lleguen en
-        // los próximos N ms y procesa todo junto al final.
+        // Para Mia, convertir audio/imagen a texto antes de encolar.
+        const richText = await multimodalToText(data);
+        if (!richText) {
+          console.warn(`[webhook] → Mia | media sin procesar para ${patient.nombre}, ignorando`);
+          return;
+        }
+        console.log(`[webhook] → Mia (buffer) | ${patient.nombre} (${phone}): ${richText.slice(0, 100)}`);
         enqueueMiaMessage({
           patient,
-          text,
+          text: richText,
           messageId,
           senderJid: remoteJid,
           debounceMs: config.mia.debounceMs,
@@ -155,6 +162,12 @@ async function processMessage(data) {
   // crons pero KIRA no entabla conversación. Si responden, se ignora en silencio.
   if (member.role === 'owner') {
     console.log(`[webhook] ignorando mensaje de owner ${member.name} (${phone}) — espacio unidireccional`);
+    return;
+  }
+
+  // KIRA-mkt no procesa multimedia. Si llega audio/imagen sin texto, ignoramos.
+  if (!text) {
+    console.log(`[webhook] mkt | ${member.name} envió media sin texto, ignorado (mkt no procesa multimedia).`);
     return;
   }
 
@@ -204,6 +217,57 @@ function extractText(data) {
     m.videoMessage?.caption ??
     null
   );
+}
+
+// Detecta el tipo de mensaje entrante (text, audio, image, sticker, otro).
+// Para audio/imagen devuelve el caption si el paciente puso texto junto.
+function classifyMessage(data) {
+  const m = data?.message;
+  if (!m) return { kind: 'unknown' };
+  if (m.audioMessage)       return { kind: 'audio',   caption: '' };
+  if (m.imageMessage)       return { kind: 'image',   caption: m.imageMessage.caption ?? '' };
+  if (m.stickerMessage)     return { kind: 'sticker', caption: '' };
+  if (m.videoMessage)       return { kind: 'video',   caption: m.videoMessage.caption ?? '' };
+  if (m.documentMessage)    return { kind: 'document', caption: m.documentMessage.caption ?? '' };
+  const text = m.conversation ?? m.extendedTextMessage?.text ?? null;
+  if (text) return { kind: 'text', text };
+  return { kind: 'unknown' };
+}
+
+// Convierte un mensaje multimedia a texto que Mia puede procesar.
+// - audio:    transcribe con Whisper → "[audio]: <transcripción>"
+// - image:    visión con gpt-4o-mini → "[imagen]: <descripción>" (+ caption si hay)
+// - sticker:  texto genérico para que Mia entienda
+// Devuelve null si el media no pudo procesarse.
+async function multimodalToText(data) {
+  const c = classifyMessage(data);
+  if (c.kind === 'text')    return c.text;
+  if (c.kind === 'sticker') return '[El paciente envió un sticker.]';
+
+  if (c.kind === 'audio' || c.kind === 'image') {
+    const media = await fetchMessageMediaBase64(data);
+    if (!media?.base64) {
+      console.warn(`[webhook] no pude bajar media (${c.kind})`);
+      return c.kind === 'image' && c.caption ? c.caption : null;
+    }
+    if (c.kind === 'audio') {
+      const txt = await transcribeAudio({ base64: media.base64, mimetype: media.mimetype });
+      return txt ? `[audio]: ${txt}` : null;
+    }
+    if (c.kind === 'image') {
+      const desc = await describeImage({ base64: media.base64, mimetype: media.mimetype, caption: c.caption });
+      const prefix = c.caption ? `[imagen, caption "${c.caption}"]` : '[imagen]';
+      return desc ? `${prefix}: ${desc}` : prefix;
+    }
+  }
+
+  if (c.kind === 'video') {
+    return c.caption ? `[video con caption]: ${c.caption}` : '[El paciente envió un video.]';
+  }
+  if (c.kind === 'document') {
+    return c.caption ? `[documento adjunto con caption]: ${c.caption}` : '[El paciente envió un documento adjunto.]';
+  }
+  return null;
 }
 
 async function dispatchMessages(messages, { senderJid }) {

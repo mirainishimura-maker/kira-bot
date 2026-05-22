@@ -47,3 +47,24 @@ export function sendImage(jid, imageUrl, caption = '') {
     caption,
   });
 }
+
+// Descarga el media (audio/imagen/video) de un mensaje en formato base64.
+// Recibe el "message" completo tal como vino en el webhook (con key + message).
+// Devuelve { base64, mimetype, fileName } o null si falla.
+export async function fetchMessageMediaBase64(message) {
+  if (!message?.key?.id) return null;
+  try {
+    const data = await call(`/chat/getBase64FromMediaMessage/${instance}`, 'POST', {
+      message: { key: message.key, message: message.message },
+      convertToMp4: false,
+    });
+    return {
+      base64:   data?.base64   ?? data?.base ?? null,
+      mimetype: data?.mimetype ?? data?.mediaType ?? null,
+      fileName: data?.fileName ?? null,
+    };
+  } catch (err) {
+    console.error('[evolution] fetchMessageMediaBase64 falló:', err.message);
+    return null;
+  }
+}
