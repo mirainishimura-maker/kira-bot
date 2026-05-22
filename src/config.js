@@ -51,7 +51,10 @@ export const config = {
       supabase: { url, serviceRoleKey: key },
       openai:   { apiKey: aiKey, model: process.env.MIRAI_OPENAI_MODEL || 'gpt-4o-mini' },
       personalPhone: personal,
-      silenceAfterMiraiMinutes: Number(process.env.MIA_SILENCE_AFTER_MIRAI_MINUTES ?? 240),
+      // Default 0: Mia continúa de inmediato después del saludo manual de Mirai.
+      // Si en el futuro quieres que se quede callada un rato tras tus mensajes
+      // manuales, sube este valor con la env var MIA_SILENCE_AFTER_MIRAI_MINUTES.
+      silenceAfterMiraiMinutes: Number(process.env.MIA_SILENCE_AFTER_MIRAI_MINUTES ?? 0),
     };
   })(),
 };
