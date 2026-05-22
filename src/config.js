@@ -37,4 +37,21 @@ export const config = {
   },
 
   webhookSecret: process.env.WEBHOOK_SECRET ?? '',
+
+  // Módulo Mia (clínica privada de Mirai). Todo opcional: si falta cualquier
+  // pieza, mia.enabled = false y el webhook no la activa. KIRA-mkt sigue
+  // funcionando intacto.
+  mia: (() => {
+    const url      = process.env.MIRAI_SUPABASE_URL || '';
+    const key      = process.env.MIRAI_SUPABASE_SERVICE_ROLE_KEY || '';
+    const aiKey    = process.env.MIRAI_OPENAI_API_KEY || '';
+    const personal = process.env.MIRAI_PERSONAL_PHONE || '';
+    return {
+      enabled: Boolean(url && key && aiKey && personal),
+      supabase: { url, serviceRoleKey: key },
+      openai:   { apiKey: aiKey, model: process.env.MIRAI_OPENAI_MODEL || 'gpt-4o-mini' },
+      personalPhone: personal,
+      silenceAfterMiraiMinutes: Number(process.env.MIA_SILENCE_AFTER_MIRAI_MINUTES ?? 240),
+    };
+  })(),
 };

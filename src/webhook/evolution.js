@@ -13,6 +13,11 @@ import { ask } from '../services/ai.js';
 import { executeActions } from '../services/actions.js';
 import { sendText } from '../lib/evolution.js';
 import { getMemberSpaceSlugs } from '../services/spaces.js';
+import { config } from '../config.js';
+import {
+  findPatientByPhone, normalizePhone, isMiaCommand, handleMiaCommand,
+  handleMiaMessage, handleMiraiManualOutbound, isMiaSentId,
+} from '../services/mia/index.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -36,7 +41,30 @@ export async function handleWebhook(req, res) {
 async function processMessage(data) {
   const remoteJid = data?.key?.remoteJid;
   const fromMe    = data?.key?.fromMe === true;
-  if (!remoteJid || fromMe) return;
+  const messageId = data?.key?.id ?? null;
+  if (!remoteJid) return;
+
+  // ---- Caso especial: mensaje fromMe=true ----
+  // Si Mia está habilitada y el destino es un paciente etiquetado, hay que
+  // distinguir si es eco de un mensaje nuestro (Mia) o si Mirai escribió
+  // manualmente desde su Business al paciente.
+  if (fromMe) {
+    if (!config.mia.enabled) return; // KIRA puro: ignoramos como antes.
+    if (isMiaSentId(messageId)) return; // eco de Mia, ignorar.
+    const channel = detectChannel(remoteJid);
+    if (channel !== CHANNEL_PRIVATE) return; // solo nos importan privados.
+    const targetPhone = phoneFromJid(remoteJid);
+    const patient = await findPatientByPhone(targetPhone);
+    if (!patient) return;
+    const text = extractText(data);
+    if (!text) return;
+    try {
+      await handleMiraiManualOutbound({ patient, text, messageId });
+    } catch (err) {
+      console.error('[webhook] error registrando outbound manual de Mirai:', err.message);
+    }
+    return;
+  }
 
   const channel = detectChannel(remoteJid);
   if (!channel) {
@@ -54,6 +82,25 @@ async function processMessage(data) {
       return;
     }
     if (!isAddressedToKira(text)) return;
+  }
+
+  // ---- Comandos de Mia: solo desde MIRAI_PERSONAL_PHONE, en privado ----
+  if (channel === CHANNEL_PRIVATE && config.mia.enabled && isMiaCommand(text)) {
+    const senderPhone = phoneFromJid(remoteJid);
+    if (senderPhone === config.mia.personalPhone) {
+      console.log(`[webhook] comando Mia desde personal de Mirai: ${text.slice(0, 80)}`);
+      try {
+        const result = await handleMiaCommand(text);
+        await dispatchMessages(result.messages, { senderJid: remoteJid });
+      } catch (err) {
+        console.error('[webhook] error procesando comando Mia:', err.message);
+        await dispatchMessages(
+          [{ channel: 'private', text: `⚠️ Error en comando: ${err.message}` }],
+          { senderJid: remoteJid },
+        );
+      }
+      return;
+    }
   }
 
   // Identificamos al miembro por el número.
@@ -78,6 +125,19 @@ async function processMessage(data) {
   const member = await findMemberByPhone(phone);
 
   if (!member) {
+    // ¿Es paciente de Mirai (módulo Mia)? Solo en privado, solo si Mia activa.
+    if (channel === CHANNEL_PRIVATE && config.mia.enabled) {
+      const patient = await findPatientByPhone(phone);
+      if (patient) {
+        console.log(`[webhook] → Mia | ${patient.nombre} (${phone}): ${text.slice(0, 80)}`);
+        try {
+          await handleMiaMessage({ patient, text, messageId, senderJid: remoteJid });
+        } catch (err) {
+          console.error('[webhook] error en handleMiaMessage:', err);
+        }
+        return;
+      }
+    }
     console.log(`[webhook] no identificado | channel=${channel} | tried=${JSON.stringify(candidateJids)} | parsed=${phone} | pushName=${data?.pushName ?? '?'}`);
     return;
   }
