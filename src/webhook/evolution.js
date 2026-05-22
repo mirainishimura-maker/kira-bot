@@ -89,13 +89,24 @@ async function processMessage(data) {
     if (!isAddressedToKira(text)) return;
   }
 
-  // ---- Comandos de Mia y notas de leads: solo desde MIRAI_PERSONAL_PHONE ----
+  // ---- Comandos de Mia y notas de leads ----
+  // Mirai personal: comandos + notas. Operadores (asistente): solo notas.
   if (channel === CHANNEL_PRIVATE && config.mia.enabled && text) {
     const senderPhone = phoneFromJid(remoteJid);
-    if (senderPhone === config.mia.personalPhone) {
-      // 1) Comando explícito /paciente, /pacientes, /quitar, /notas
+    const isMirai     = senderPhone === config.mia.personalPhone;
+    const isOperator  = config.mia.operatorPhones.includes(senderPhone);
+
+    if (isMirai || isOperator) {
+      // 1) Comando explícito (solo Mirai puede ejecutarlo)
       if (isMiaCommand(text)) {
-        console.log(`[webhook] comando Mia desde personal de Mirai: ${text.slice(0, 80)}`);
+        if (!isMirai) {
+          await dispatchMessages(
+            [{ channel: 'private', text: 'Los comandos administrativos solo los puede ejecutar Mirai 🌸 Si quieres ingresar un lead, mándame la nota con el número y nombre como siempre.' }],
+            { senderJid: remoteJid },
+          );
+          return;
+        }
+        console.log(`[webhook] comando Mia desde Mirai: ${text.slice(0, 80)}`);
         try {
           const result = await handleMiaCommand(text);
           await dispatchMessages(result.messages, { senderJid: remoteJid });
@@ -108,9 +119,10 @@ async function processMessage(data) {
         }
         return;
       }
-      // 2) Nota de lead: texto con teléfono peruano + keyword (pcte, paciente, etc.)
+      // 2) Nota de lead (Mirai u operador autorizado)
       if (detectLeadNote(text)) {
-        console.log(`[webhook] nota de lead detectada desde personal de Mirai: ${text.slice(0, 100)}`);
+        const sourceLabel = isMirai ? 'Mirai' : `operador ${senderPhone}`;
+        console.log(`[webhook] nota de lead detectada desde ${sourceLabel}: ${text.slice(0, 100)}`);
         try {
           const result = await handleLeadIntake(text);
           if (result?.messages) await dispatchMessages(result.messages, { senderJid: remoteJid });
@@ -121,6 +133,15 @@ async function processMessage(data) {
             { senderJid: remoteJid },
           );
         }
+        return;
+      }
+      // 3) Operador escribió algo que no es comando ni nota de lead.
+      // Respondemos con instrucción breve para que no quede en silencio.
+      if (isOperator) {
+        await dispatchMessages(
+          [{ channel: 'private', text: 'Hola 🌸 acá solo proceso notas de leads. Mándame el número y el nombre/datos del lead y yo me encargo de saludarlo y agregarlo.' }],
+          { senderJid: remoteJid },
+        );
         return;
       }
     }

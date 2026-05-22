@@ -46,11 +46,19 @@ export const config = {
     const key      = process.env.MIRAI_SUPABASE_SERVICE_ROLE_KEY || '';
     const aiKey    = process.env.MIRAI_OPENAI_API_KEY || '';
     const personal = process.env.MIRAI_PERSONAL_PHONE || '';
+    // Lista de números autorizados a enviar notas de leads desde su propio
+    // WhatsApp (ej: la asistente de la clínica). Pueden hacer intake de
+    // leads pero NO comandos administrativos — eso queda solo para Mirai.
+    const operatorPhones = (process.env.MIA_OPERATOR_PHONES || '')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
     return {
       enabled: Boolean(url && key && aiKey && personal),
       supabase: { url, serviceRoleKey: key },
       openai:   { apiKey: aiKey, model: process.env.MIRAI_OPENAI_MODEL || 'gpt-4o-mini' },
       personalPhone: personal,
+      operatorPhones,
       // Silencio inteligente: si Mirai retoma manual EN MEDIO de un flujo de
       // Mia (ya hubo mensaje de Mia previo), Mia se calla X minutos. La
       // apertura inicial (sin mensaje previo de Mia) NUNCA silencia, sin
