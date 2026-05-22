@@ -51,10 +51,16 @@ export const config = {
       supabase: { url, serviceRoleKey: key },
       openai:   { apiKey: aiKey, model: process.env.MIRAI_OPENAI_MODEL || 'gpt-4o-mini' },
       personalPhone: personal,
-      // Default 0: Mia continúa de inmediato después del saludo manual de Mirai.
-      // Si en el futuro quieres que se quede callada un rato tras tus mensajes
-      // manuales, sube este valor con la env var MIA_SILENCE_AFTER_MIRAI_MINUTES.
-      silenceAfterMiraiMinutes: Number(process.env.MIA_SILENCE_AFTER_MIRAI_MINUTES ?? 0),
+      // Silencio inteligente: si Mirai retoma manual EN MEDIO de un flujo de
+      // Mia (ya hubo mensaje de Mia previo), Mia se calla X minutos. La
+      // apertura inicial (sin mensaje previo de Mia) NUNCA silencia, sin
+      // importar el valor de aquí. Pon 0 para desactivar completamente.
+      silenceAfterMiraiMinutes: Number(process.env.MIA_SILENCE_AFTER_MIRAI_MINUTES ?? 5),
+      // URLs públicas de imágenes que Mia puede enviar. La key del map debe
+      // coincidir con el identificador que Mia usa en su campo "imagenes".
+      images: {
+        foto_sede: process.env.MIA_IMG_FOTO_SEDE || null,
+      },
     };
   })(),
 };

@@ -53,22 +53,54 @@ export async function recentMessages(patientId, limit = 20) {
   return (data ?? []).reverse(); // orden cronológico
 }
 
-// Detecta si el último mensaje "mirai" (manual) fue hace menos de X minutos.
-// Si sí, Mia entra en modo silencio para no interrumpir.
-export async function lastMiraiManualMessageWithinMinutes(patientId, minutes) {
+// Silencio inteligente:
+// - Si Mia NUNCA ha hablado con este paciente, es la apertura inicial de
+//   Mirai → no silenciar (Mia debe tomar control del triage).
+// - Si Mia ya habló Y el último mensaje de Mirai es más reciente que el
+//   último de Mia, significa que Mirai retomó la conversación manualmente
+//   en medio del flujo → silenciar X minutos (default 5).
+// - El parámetro `silenceMinutes=0` desactiva el silencio completamente
+//   incluso en caso de retomar (modo "Mia nunca calla").
+export async function shouldMiaBeSilent(patientId, silenceMinutes) {
   if (!miraiSupabase || !patientId) return false;
-  const since = new Date(Date.now() - minutes * 60_000).toISOString();
+  if (silenceMinutes === 0) return false;
+
   const { data, error } = await miraiSupabase
     .from('conversations')
-    .select('id')
+    .select('author, created_at')
     .eq('patient_id', patientId)
-    .eq('author', 'mirai')
-    .gt('created_at', since)
-    .limit(1);
+    .in('author', ['mia', 'mirai'])
+    .order('created_at', { ascending: false })
+    .limit(50);
 
   if (error) {
-    console.error('[mia/conversations] lastMiraiManual error:', error.message);
+    console.error('[mia/conversations] shouldMiaBeSilent error:', error.message);
     return false;
   }
-  return (data?.length ?? 0) > 0;
+  const rows = data ?? [];
+
+  // Buscar el último de Mia y el último de Mirai.
+  let lastMia = null;
+  let lastMirai = null;
+  for (const r of rows) {
+    if (!lastMia   && r.author === 'mia')   lastMia   = r.created_at;
+    if (!lastMirai && r.author === 'mirai') lastMirai = r.created_at;
+    if (lastMia && lastMirai) break;
+  }
+
+  // Si Mia nunca ha hablado, es apertura inicial → no silenciar.
+  if (!lastMia) return false;
+
+  // Si no hay mensaje de Mirai posterior, no silenciar.
+  if (!lastMirai) return false;
+
+  // Si el último de Mirai NO es posterior al último de Mia, no silenciar.
+  if (lastMirai <= lastMia) return false;
+
+  // Mirai retomó tras Mia. Silenciar si fue hace menos de X minutos.
+  const since = new Date(Date.now() - silenceMinutes * 60_000).toISOString();
+  return lastMirai > since;
 }
+
+// Backwards-compat: nombre viejo. Mantenido para evitar romper imports.
+export const lastMiraiManualMessageWithinMinutes = shouldMiaBeSilent;

@@ -37,3 +37,13 @@ export function sendToGroup(text) {
 export function sendPrivate(phoneE164, text) {
   return sendText(`${phoneE164}@s.whatsapp.net`, text);
 }
+
+// Envía una imagen (URL pública) a un JID. Opcionalmente con caption.
+export function sendImage(jid, imageUrl, caption = '') {
+  return call(`/message/sendMedia/${instance}`, 'POST', {
+    number: jid,
+    mediatype: 'image',
+    media: imageUrl,
+    caption,
+  });
+}

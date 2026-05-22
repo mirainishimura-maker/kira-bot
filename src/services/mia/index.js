@@ -11,9 +11,9 @@
 //   6. Si Mia escala o detecta crisis, notificar a Mirai a su personal.
 
 import { config } from '../../config.js';
-import { sendText } from '../../lib/evolution.js';
+import { sendText, sendImage } from '../../lib/evolution.js';
 import { askMia } from './ai.js';
-import { logMessage, lastMiraiManualMessageWithinMinutes } from './conversations.js';
+import { logMessage, shouldMiaBeSilent } from './conversations.js';
 import { touchPatientInteraction } from './patients.js';
 import { rememberMiaSentId } from './echoTracker.js';
 
@@ -32,14 +32,15 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
   });
   await touchPatientInteraction(patient.id, { authorCounted: 'patient' });
 
-  // 2. Modo silencio: si Mirai escribió a este paciente hace <silenceAfterMiraiMinutes>,
-  // Mia se calla para no interrumpir una conversación humana en curso.
-  const silenced = await lastMiraiManualMessageWithinMinutes(
+  // 2. Modo silencio INTELIGENTE: solo silenciar si Mirai retomó manual
+  // EN MEDIO de un flujo donde Mia ya respondió. La apertura inicial NO
+  // silencia (Mia debe tomar control del triage).
+  const silenced = await shouldMiaBeSilent(
     patient.id,
     config.mia.silenceAfterMiraiMinutes,
   );
   if (silenced) {
-    console.log(`[mia] silencio activo para ${patient.nombre} — Mirai habló recientemente.`);
+    console.log(`[mia] silencio activo para ${patient.nombre} — Mirai retomó manual hace <${config.mia.silenceAfterMiraiMinutes}m.`);
     return;
   }
 
@@ -47,26 +48,57 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
   console.log(`[mia] generando respuesta para ${patient.nombre}: "${text.slice(0, 80)}"`);
   const result = await askMia({ patient, message: text });
 
-  // 4 + 5. Enviar cada burbuja y loguearla.
+  // 4 + 5. Enviar cada burbuja y loguearla. datos_lead se guarda solo en la
+  // primera burbuja del turno (representa el snapshot tras este intercambio).
+  let isFirstBubble = true;
   for (const msg of result.messages ?? []) {
     if (!msg?.text) continue;
     try {
       const sent = await sendText(senderJid, msg.text);
       const sentId = sent?.key?.id ?? null;
       if (sentId) rememberMiaSentId(sentId);
+      const metadata = {
+        escalar_mirai: Boolean(result.escalar_mirai),
+        crisis: Boolean(result.crisis),
+      };
+      if (isFirstBubble && result.datos_lead) {
+        metadata.datos_lead = result.datos_lead;
+        isFirstBubble = false;
+      }
       await logMessage({
         patientId: patient.id,
         author: 'mia',
         content: msg.text,
         whatsappMessageId: sentId,
-        metadata: {
-          escalar_mirai: Boolean(result.escalar_mirai),
-          crisis: Boolean(result.crisis),
-        },
+        metadata,
       });
       await touchPatientInteraction(patient.id, { authorCounted: 'mia' });
     } catch (err) {
       console.error('[mia] error enviando burbuja:', err.message);
+    }
+  }
+
+  // 4b. Enviar imágenes si Mia las solicitó en el JSON.
+  for (const imgKey of result.imagenes ?? []) {
+    const url = config.mia.images?.[imgKey];
+    if (!url) {
+      console.warn(`[mia] imagen "${imgKey}" pedida pero URL no configurada en env (MIA_IMG_${imgKey.toUpperCase()}).`);
+      continue;
+    }
+    try {
+      const sent = await sendImage(senderJid, url);
+      const sentId = sent?.key?.id ?? null;
+      if (sentId) rememberMiaSentId(sentId);
+      await logMessage({
+        patientId: patient.id,
+        author: 'mia',
+        content: `[imagen: ${imgKey}]`,
+        messageType: 'image',
+        whatsappMessageId: sentId,
+        metadata: { image_key: imgKey, image_url: url },
+      });
+    } catch (err) {
+      console.error(`[mia] error enviando imagen "${imgKey}":`, err.message);
     }
   }
 

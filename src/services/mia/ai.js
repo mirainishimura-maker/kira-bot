@@ -126,17 +126,16 @@ function parseMiaResponse(content) {
     parsed = JSON.parse(raw);
   } catch {
     console.warn('[mia/ai] respuesta no-JSON, envolviendo:', raw.slice(0, 200));
-    parsed = { respuesta: String(raw), escalar_mirai: false, crisis: false, razon_escalamiento: '' };
+    parsed = { respuesta: String(raw), imagenes: [], escalar_mirai: false, crisis: false, razon_escalamiento: '' };
   }
 
   const respuesta = String(parsed.respuesta ?? '').trim();
+  const imagenes  = Array.isArray(parsed.imagenes) ? parsed.imagenes.filter(Boolean) : [];
   const escalar   = Boolean(parsed.escalar_mirai);
   const crisis    = Boolean(parsed.crisis);
   const razon     = String(parsed.razon_escalamiento ?? '');
+  const datos     = parsed.datos_lead && typeof parsed.datos_lead === 'object' ? parsed.datos_lead : null;
 
-  // Convertir el campo "respuesta" (con \n\n separando burbujas) en un array
-  // de mensajes para que el dispatchMessages del webhook los envíe como
-  // mensajes distintos en WhatsApp.
   const burbujas = respuesta
     .split(/\n{2,}/)
     .map(s => s.trim())
@@ -145,17 +144,21 @@ function parseMiaResponse(content) {
 
   return {
     messages: burbujas.length ? burbujas : [{ channel: 'private', text: 'Estoy procesando, dame un momento 🌸' }],
+    imagenes,
     escalar_mirai: escalar,
     crisis,
     razon,
+    datos_lead: datos,
   };
 }
 
 function fallbackEscalate(razon) {
   return {
     messages: [{ channel: 'private', text: 'Estoy en mantenimiento un momento, Mirai ya te escribe 🌸' }],
+    imagenes: [],
     escalar_mirai: true,
     crisis: false,
     razon,
+    datos_lead: null,
   };
 }
