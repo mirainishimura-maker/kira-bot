@@ -18,6 +18,7 @@ import {
   findPatientByPhone, normalizePhone, isMiaCommand, handleMiaCommand,
   handleMiaMessage, handleMiraiManualOutbound, isMiaSentId,
 } from '../services/mia/index.js';
+import { enqueueMiaMessage } from '../services/mia/inbox.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -129,12 +130,17 @@ async function processMessage(data) {
     if (channel === CHANNEL_PRIVATE && config.mia.enabled) {
       const patient = await findPatientByPhone(phone);
       if (patient) {
-        console.log(`[webhook] → Mia | ${patient.nombre} (${phone}): ${text.slice(0, 80)}`);
-        try {
-          await handleMiaMessage({ patient, text, messageId, senderJid: remoteJid });
-        } catch (err) {
-          console.error('[webhook] error en handleMiaMessage:', err);
-        }
+        console.log(`[webhook] → Mia (buffer) | ${patient.nombre} (${phone}): ${text.slice(0, 80)}`);
+        // Encolar con debounce: agrupa mensajes del paciente que lleguen en
+        // los próximos N ms y procesa todo junto al final.
+        enqueueMiaMessage({
+          patient,
+          text,
+          messageId,
+          senderJid: remoteJid,
+          debounceMs: config.mia.debounceMs,
+          onFlush: handleMiaMessage,
+        });
         return;
       }
     }

@@ -56,6 +56,11 @@ export const config = {
       // apertura inicial (sin mensaje previo de Mia) NUNCA silencia, sin
       // importar el valor de aquí. Pon 0 para desactivar completamente.
       silenceAfterMiraiMinutes: Number(process.env.MIA_SILENCE_AFTER_MIRAI_MINUTES ?? 5),
+      // Debounce de mensajes entrantes: Mia espera N ms antes de procesar
+      // un mensaje, agrupando los que lleguen del mismo paciente en ese
+      // intervalo. Evita que Mia responda 3 veces si el paciente manda 3
+      // mensajes seguidos. Default 10 segundos.
+      debounceMs: Number(process.env.MIA_DEBOUNCE_MS ?? 10_000),
       // URLs públicas de imágenes que Mia puede enviar. La key del map debe
       // coincidir con el identificador que Mia usa en su campo "imagenes".
       images: {
