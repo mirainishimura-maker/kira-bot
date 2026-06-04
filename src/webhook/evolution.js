@@ -185,6 +185,7 @@ async function processMessage(data) {
           messageId,
           senderJid: remoteJid,
           debounceMs: config.mia.debounceMs,
+          debounceMaxMs: config.mia.debounceMaxMs,
           onFlush: handleMiaMessage,
         });
         return;

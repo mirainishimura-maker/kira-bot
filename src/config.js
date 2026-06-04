@@ -67,14 +67,22 @@ export const config = {
         const n = Number(process.env.MIA_SILENCE_AFTER_MIRAI_MINUTES);
         return Number.isFinite(n) && n >= 0 ? n : 5;
       })(),
-      // Debounce de mensajes entrantes: Mia espera N ms antes de procesar
-      // un mensaje, agrupando los que lleguen del mismo paciente en ese
-      // intervalo. Evita que Mia responda 3 veces si el paciente manda 3
-      // mensajes seguidos. Default 10 segundos.
-      // Robusto contra env var vacía/inválida: usa 10s en esos casos.
+      // Debounce de mensajes entrantes: Mia espera una ventana de silencio
+      // antes de procesar, agrupando los mensajes que lleguen del mismo
+      // paciente. Cada mensaje nuevo REINICIA la ventana (deslizante), así
+      // espera a que el paciente termine de escribir. Default 30 segundos.
+      // Robusto contra env var vacía/inválida: usa 30s en esos casos.
       debounceMs: (() => {
         const n = Number(process.env.MIA_DEBOUNCE_MS);
-        return Number.isFinite(n) && n > 0 ? n : 10_000;
+        return Number.isFinite(n) && n > 0 ? n : 30_000;
+      })(),
+      // Tope máximo del lote: aunque el paciente siga escribiendo y reinicie
+      // la ventana deslizante, el lote se cierra a la fuerza al llegar a este
+      // tope. Evita que un paciente muy hablador retrase la respuesta para
+      // siempre. Default 2 minutos.
+      debounceMaxMs: (() => {
+        const n = Number(process.env.MIA_DEBOUNCE_MAX_MS);
+        return Number.isFinite(n) && n > 0 ? n : 120_000;
       })(),
       // URLs públicas de imágenes que Mia puede enviar. La key del map debe
       // coincidir con el identificador que Mia usa en su campo "imagenes".
