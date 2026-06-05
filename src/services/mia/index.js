@@ -57,12 +57,17 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
     result.messages = [{ channel: 'private', text: 'Dame un momentito, ahí te respondo 🌸' }];
   }
 
-  // 4 + 5. Enviar cada burbuja y loguearla. datos_lead se guarda solo en la
+  // 4 + 5. Enviar burbujas + imágenes. datos_lead se guarda solo en la
   // primera burbuja del turno (representa el snapshot tras este intercambio).
-  let isFirstBubble = true;
+  //
+  // Orden de envío: PRIMERA burbuja → imágenes → resto de burbujas. Así, en
+  // el turno de la sede, el paciente recibe [dirección+link] → [foto] →
+  // [pregunta combinada], que es como se ve más natural. Si no hay imágenes,
+  // el orden es simplemente todas las burbujas en secuencia.
+  const bubbles = (result.messages ?? []).filter(m => m?.text);
   let burbujasEnviadas = 0;
-  for (const msg of result.messages ?? []) {
-    if (!msg?.text) continue;
+
+  const sendBubble = async (msg, withDatosLead) => {
     try {
       const sent = await sendText(senderJid, msg.text);
       const sentId = sent?.key?.id ?? null;
@@ -71,10 +76,7 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
         escalar_mirai: Boolean(result.escalar_mirai),
         crisis: Boolean(result.crisis),
       };
-      if (isFirstBubble && result.datos_lead) {
-        metadata.datos_lead = result.datos_lead;
-        isFirstBubble = false;
-      }
+      if (withDatosLead && result.datos_lead) metadata.datos_lead = result.datos_lead;
       await logMessage({
         patientId: patient.id,
         author: 'mia',
@@ -87,6 +89,39 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
     } catch (err) {
       console.error(`[mia] ⚠️ error enviando burbuja a ${patient.nombre}:`, err.message);
     }
+  };
+
+  const sendImages = async () => {
+    for (const imgKey of result.imagenes ?? []) {
+      const url = config.mia.images?.[imgKey];
+      if (!url) {
+        console.warn(`[mia] imagen "${imgKey}" pedida pero URL no configurada en env (MIA_IMG_${imgKey.toUpperCase()}).`);
+        continue;
+      }
+      try {
+        const sent = await sendImage(senderJid, url);
+        const sentId = sent?.key?.id ?? null;
+        if (sentId) rememberMiaSentId(sentId);
+        await logMessage({
+          patientId: patient.id,
+          author: 'mia',
+          content: `[imagen: ${imgKey}]`,
+          messageType: 'image',
+          whatsappMessageId: sentId,
+          metadata: { image_key: imgKey, image_url: url },
+        });
+      } catch (err) {
+        console.error(`[mia] error enviando imagen "${imgKey}":`, err.message);
+      }
+    }
+  };
+
+  if (bubbles.length) {
+    await sendBubble(bubbles[0], true);   // 1ª burbuja (lleva datos_lead)
+    await sendImages();                   // foto justo después de la 1ª burbuja
+    for (let i = 1; i < bubbles.length; i++) await sendBubble(bubbles[i], false);
+  } else {
+    await sendImages();
   }
   console.log(`[mia] envío completo | ${patient.nombre} | ${burbujasEnviadas}/${burbujas} burbujas enviadas`);
 
@@ -109,30 +144,6 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
       });
     } catch (err) {
       console.warn('[mia] no pude actualizar CRM con datos_lead:', err.message);
-    }
-  }
-
-  // 4b. Enviar imágenes si Mia las solicitó en el JSON.
-  for (const imgKey of result.imagenes ?? []) {
-    const url = config.mia.images?.[imgKey];
-    if (!url) {
-      console.warn(`[mia] imagen "${imgKey}" pedida pero URL no configurada en env (MIA_IMG_${imgKey.toUpperCase()}).`);
-      continue;
-    }
-    try {
-      const sent = await sendImage(senderJid, url);
-      const sentId = sent?.key?.id ?? null;
-      if (sentId) rememberMiaSentId(sentId);
-      await logMessage({
-        patientId: patient.id,
-        author: 'mia',
-        content: `[imagen: ${imgKey}]`,
-        messageType: 'image',
-        whatsappMessageId: sentId,
-        metadata: { image_key: imgKey, image_url: url },
-      });
-    } catch (err) {
-      console.error(`[mia] error enviando imagen "${imgKey}":`, err.message);
     }
   }
 
