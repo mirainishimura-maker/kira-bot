@@ -88,6 +88,26 @@ export async function removePatient(phone) {
   return data;
 }
 
+// Cambia el estado de un paciente. Se usa para silenciar/reactivar a Mia:
+//   estado='silenciada' → el webhook no enruta sus mensajes a Mia.
+//   estado='datos_parciales' (u otro) → Mia vuelve a responder.
+export async function setPatientEstado(phone, estado) {
+  if (!miraiSupabase) throw new Error('Mia no está habilitado');
+  const normalized = normalizePhone(phone);
+  if (!normalized) throw new Error('Teléfono inválido');
+  if (!estado) throw new Error('Estado requerido');
+
+  const { data, error } = await miraiSupabase
+    .from('patients')
+    .update({ estado })
+    .eq('phone', normalized)
+    .select()
+    .maybeSingle();
+
+  if (error) throw new Error(`No pude cambiar el estado: ${error.message}`);
+  return data;
+}
+
 export async function addNoteToPatient(phone, nota) {
   if (!miraiSupabase) throw new Error('Mia no está habilitado');
   const normalized = normalizePhone(phone);

@@ -172,6 +172,12 @@ async function processMessage(data) {
     if (channel === CHANNEL_PRIVATE && config.mia.enabled) {
       const patient = await findPatientByPhone(phone);
       if (patient) {
+        // Gate: si el paciente fue silenciado (/silenciar) o dado de alta
+        // (/quitar), Mia NO responde — silencio total. Mirai lo atiende manual.
+        if (patient.estado === 'silenciada' || patient.estado === 'alta') {
+          console.log(`[webhook] → Mia | ${patient.nombre} estado="${patient.estado}", Mia no responde (silencio).`);
+          return;
+        }
         // Para Mia, convertir audio/imagen a texto antes de encolar.
         const richText = await multimodalToText(data);
         if (!richText) {

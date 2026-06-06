@@ -6,14 +6,16 @@
 //   /quitar 51987654321                     (marca estado='alta')
 //   /notas 51987654321 [texto largo]        (agrega nota privada)
 //   /atender 51987654321 Nombre             (agrega lead_organico + envía saludo de bienvenida)
+//   /silenciar 51987654321                   (Mia deja de responderle — reversible)
+//   /activar 51987654321                     (Mia vuelve a responderle)
 
-import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone } from './patients.js';
+import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
 import { logMessage } from './conversations.js';
 import { sendText } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -42,6 +44,8 @@ export async function handleMiaCommand(text) {
     if (command === 'atender')   return await cmdAtenderLead(rest);
     if (command === 'retomar')   return await cmdRetomarLead(rest);
     if (command === 'responder') return await cmdResponderEnNombreDeLead(rest);
+    if (command === 'silenciar') return await cmdSilenciar(rest);
+    if (command === 'activar')   return await cmdActivar(rest);
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
   }
@@ -146,7 +150,27 @@ async function cmdRemovePatient(rest) {
   const normalized = normalizePhone(phone);
   const updated = await removePatient(normalized);
   if (!updated) return reply(`No encontré paciente con ese número (${normalized}).`);
-  return reply(`✓ ${updated.nombre} marcado como "alta". Ya no recibirá respuestas de Mia.`);
+  return reply(`✓ ${updated.nombre} marcado como "alta". Mia ya no le responde (silencio total). Si fue por error, reactívala con /activar ${normalized}.`);
+}
+
+async function cmdSilenciar(rest) {
+  const phone = rest.trim().split(/\s+/)[0];
+  if (!phone) return reply('Uso: /silenciar <telefono>\nEjemplo: /silenciar 51987654321');
+  const updated = await setPatientEstado(phone, 'silenciada');
+  if (!updated) return reply(`No encontré paciente con ese número (${normalizePhone(phone)}).`);
+  return reply(
+    `🔇 Mia silenciada para ${updated.nombre} (${updated.phone}).\n` +
+    `Ya no le responde aunque escriba. Tú puedes seguir atendiéndolo manual.\n` +
+    `Para reactivarla: /activar ${updated.phone}`
+  );
+}
+
+async function cmdActivar(rest) {
+  const phone = rest.trim().split(/\s+/)[0];
+  if (!phone) return reply('Uso: /activar <telefono>\nEjemplo: /activar 51987654321');
+  const updated = await setPatientEstado(phone, 'datos_parciales');
+  if (!updated) return reply(`No encontré paciente con ese número (${normalizePhone(phone)}).`);
+  return reply(`🔊 Mia reactivada para ${updated.nombre} (${updated.phone}). Vuelve a responderle cuando escriba.`);
 }
 
 async function cmdAddNote(rest) {
