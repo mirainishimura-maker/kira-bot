@@ -23,9 +23,19 @@
 //      - Deploy. Copiar la URL del Web app.
 //   7. Pasar la URL a Claude para meterla en EasyPanel como MIA_SHEET_WEBHOOK_URL
 //      y el secret como MIA_SHEET_WEBHOOK_SECRET.
+//
+// SETUP DEL CALENDARIO (Fase 3 — hacer también una vez):
+//   8. Ejecutar setupCalendar()    → autoriza permisos de Calendar y crea el
+//      calendario dedicado "Mia — Citas" (verás su ID en el log).
+//   9. Ejecutar installHoldTrigger() → trigger horario que limpia holds vencidos.
+//  10. Re-deployar: Deploy → Manage deployments → (editar el deployment) →
+//      Version: New version → Deploy. Así las acciones de calendario quedan
+//      publicadas en la MISMA URL (no cambia el MIA_SHEET_WEBHOOK_URL).
+//      (Ver el bloque CALENDARIO más abajo para el detalle.)
 // =====================================================================
 
 const SHEET_NAME = 'Leads';
+const REPORT_SHEET_NAME = 'Reporte';
 
 // Columnas en orden. La primera de cada bloque es la key que usa el código JS.
 const COLS = [
@@ -78,10 +88,17 @@ function doPost(e) {
 
   try {
     switch (body.action) {
-      case 'ping':       return ok({ pong: true, at: new Date().toISOString() });
-      case 'upsertLead': return ok(upsertLead(body.data || {}));
-      case 'listLeads':  return ok(listLeads(body.filter || {}));
-      default:           return err('unknown action: ' + body.action);
+      case 'ping':        return ok({ pong: true, at: new Date().toISOString() });
+      case 'upsertLead':  return ok(upsertLead(body.data || {}));
+      case 'listLeads':   return ok(listLeads(body.filter || {}));
+      case 'writeReport': return ok(writeReport(body.report || {}));
+      // ─── Calendario (Fase 3) ───
+      case 'checkAvailability':  return ok(checkAvailability(body.data || {}));
+      case 'createAppointment':  return ok(createAppointment(body.data || {}));
+      case 'confirmAppointment': return ok(confirmAppointment(body.data || {}));
+      case 'getUpcoming':        return ok(getUpcoming(body.data || {}));
+      case 'expireHolds':        return ok(expireHolds());
+      default:            return err('unknown action: ' + body.action);
     }
   } catch (ex) {
     return err('exception: ' + ex.message);
@@ -202,4 +219,329 @@ function ensureSheet() {
   const sh = SpreadsheetApp.getActive().getSheetByName(SHEET_NAME);
   if (!sh) throw new Error(`Pestaña "${SHEET_NAME}" no existe. Corre setupSheet() primero.`);
   return sh;
+}
+
+// ─── Reporte: reescribe la pestaña "Reporte" con el resumen ya calculado ──
+// El cálculo lo hace el bot (Node, desde Supabase) y aquí solo lo pintamos.
+// Devuelve la URL de la hoja para que Mia se la mande a Mirai por WhatsApp.
+function writeReport(report) {
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(REPORT_SHEET_NAME);
+  if (!sh) sh = ss.insertSheet(REPORT_SHEET_NAME);
+  sh.clear();
+
+  const rows = [];
+  const sectionRows = [];
+  const n = (v) => (v === undefined || v === null ? 0 : v);
+  function push(a, b) { rows.push([a, b === undefined ? '' : b]); return rows.length; }
+
+  const titleRow = push('Mía — Reporte de leads', '');
+  push('Actualizado:', report.generadoEn || '');
+  push('', '');
+
+  const resumen = report.resumen || {};
+  sectionRows.push(push('RESUMEN', ''));
+  push('Leads esta semana', n(resumen.semana));
+  push('Leads este mes',    n(resumen.mes));
+  push('Leads en total',    n(resumen.total));
+  push('', '');
+
+  sectionRows.push(push('POR ESTADO (todos)', ''));
+  (report.porEstado || []).forEach(function (e) { push(e.label, n(e.n)); });
+  push('', '');
+
+  sectionRows.push(push('POR FUENTE (este mes)', ''));
+  (report.porFuente || []).forEach(function (f) { push(f.label, n(f.n)); });
+  push('', '');
+
+  const c = report.conversion || {};
+  sectionRows.push(push('CONVERSIÓN (este mes)', ''));
+  push('Llegaron a agendar', n(c.num) + ' de ' + n(c.den) + ' (' + n(c.pct) + '%)');
+
+  sh.getRange(1, 1, rows.length, 2).setValues(rows);
+
+  // Formato
+  sh.getRange(titleRow, 1).setFontSize(14).setFontWeight('bold');
+  sh.getRange(2, 1, 1, 2).setFontColor('#666666');
+  sectionRows.forEach(function (r) {
+    sh.getRange(r, 1, 1, 2).setFontWeight('bold').setBackground('#f1f3f4');
+  });
+  sh.getRange(1, 2, rows.length, 1).setHorizontalAlignment('left');
+  sh.setColumnWidth(1, 230);
+  sh.setColumnWidth(2, 170);
+  sh.setFrozenRows(0);
+
+  return { url: ss.getUrl(), tab: REPORT_SHEET_NAME };
+}
+
+// =====================================================================
+// CALENDARIO (Fase 3) — agenda de citas de Mirai vía CalendarApp
+// =====================================================================
+// Este Apps Script corre "como Mirai" (Execute as: Me), así que CalendarApp
+// crea/lee eventos en SU Google Calendar. Usamos un calendario dedicado
+// "Mia — Citas" (se autocrea la primera vez) para no ensuciar el personal.
+//
+// MODELO DE CITA:
+//   - HOLD (tentativo): evento naranja, título "⏳ HOLD — <nombre>".
+//     Se crea cuando el paciente elige un horario, ANTES de pagar.
+//   - CONFIRMADA: evento verde, título "✅ <nombre>".
+//     El hold pasa a confirmada cuando el paciente envía el comprobante.
+//   - Un solo hold activo por teléfono: crear uno nuevo libera el anterior.
+//   - Un hold sin confirmar caduca a las HOLD_TTL_HORAS y deja de bloquear
+//     el slot (además expireHolds() los borra; instalar con installHoldTrigger()).
+//
+// SETUP CALENDARIO (una vez, desde el editor):
+//   1. Ejecutar setupCalendar()  → autoriza permisos de Calendar y crea
+//      el calendario "Mia — Citas". Verás su ID en el log.
+//   2. Ejecutar installHoldTrigger() → instala el trigger horario que
+//      limpia holds vencidos.
+//   3. Re-deployar el Web app (Deploy → Manage deployments → editar → New
+//      version) para que las nuevas acciones queden publicadas.
+// =====================================================================
+
+const CAL_NAME       = 'Mia — Citas';
+const CAL_TZ         = 'America/Lima';   // Perú es UTC-5 todo el año (sin DST)
+const CAL_OFFSET     = '-05:00';
+const APPT_DURATION_MIN = 45;            // primera consulta: bloque de 45 min
+const HOLD_TTL_HORAS = 24;               // hold sin pago deja de bloquear a las 24h
+const HOLD_PREFIX    = '⏳ HOLD — ';
+const OK_PREFIX      = '✅ ';
+const CAL_PROP_KEY   = 'MIA_CALENDAR_ID';
+
+// Plantilla semanal de turnos posibles. Clave = día (ISO: 1=Lun … 7=Dom),
+// valor = horas "HH:mm" en hora de Lima. MANTENER EN SYNC con el prompt de Mia.
+const WEEKLY_SLOTS = {
+  1: ['16:00'],                   // Lunes
+  2: ['15:00', '16:00', '17:00'], // Martes
+  3: ['16:00'],                   // Miércoles
+  4: ['15:00', '16:00', '17:00'], // Jueves
+  6: ['08:00'],                   // Sábado
+};
+
+// ─── Resolución del calendario dedicado ──────────────────────────────
+function getCal() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty(CAL_PROP_KEY);
+  if (id) {
+    const c = CalendarApp.getCalendarById(id);
+    if (c) return c;
+  }
+  const existing = CalendarApp.getCalendarsByName(CAL_NAME);
+  const cal = (existing && existing.length)
+    ? existing[0]
+    : CalendarApp.createCalendar(CAL_NAME, { timeZone: CAL_TZ });
+  props.setProperty(CAL_PROP_KEY, cal.getId());
+  return cal;
+}
+
+function setupCalendar() {
+  const cal = getCal();
+  Logger.log('Calendario listo: "' + cal.getName() + '"');
+  Logger.log('ID (guardado en Script Properties como ' + CAL_PROP_KEY + '): ' + cal.getId());
+  return 'OK — calendario "' + CAL_NAME + '" listo.';
+}
+
+function installHoldTrigger() {
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'expireHolds') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('expireHolds').timeBased().everyHours(1).create();
+  return 'OK — trigger expireHolds (cada 1h) instalado.';
+}
+
+// ─── Helpers de fecha/evento ─────────────────────────────────────────
+function toLimaISO(d) {
+  // "2026-06-22T16:00:00-05:00"
+  return Utilities.formatDate(d, CAL_TZ, "yyyy-MM-dd'T'HH:mm:ssXXX");
+}
+
+function slotDate(yyyy, mm, dd, hhmm) {
+  // Construye un Date a partir de ISO con offset fijo de Lima — inmune al TZ
+  // del proyecto Apps Script.
+  return new Date(Utilities.formatString('%04d-%02d-%02dT%s:00%s', yyyy, mm, dd, hhmm, CAL_OFFSET));
+}
+
+function isHold(ev)  { return ev.getTitle().indexOf(HOLD_PREFIX) === 0; }
+
+function isExpiredHold(ev) {
+  if (!isHold(ev)) return false;
+  const created = ev.getDateCreated();
+  return (new Date().getTime() - created.getTime()) > HOLD_TTL_HORAS * 3600000;
+}
+
+function setColor(ev, tentative) {
+  try {
+    ev.setColor(tentative ? CalendarApp.EventColor.ORANGE : CalendarApp.EventColor.GREEN);
+  } catch (e) { /* algunas cuentas no permiten setColor — no es crítico */ }
+}
+
+function buildDesc(o) {
+  return 'phone: ' + (o.phone || '') +
+       '\nmotivo: ' + (o.motivo || '') +
+       '\nestado: ' + (o.estado || '') +
+       '\nvia: Mia';
+}
+
+function descPhone(ev) {
+  const m = String(ev.getDescription() || '').match(/phone:\s*([0-9]+)/);
+  return m ? m[1] : '';
+}
+
+function setEstadoInDesc(desc, estado) {
+  if (/estado:\s*\S+/.test(desc)) return desc.replace(/estado:\s*\S+/, 'estado: ' + estado);
+  return (desc || '') + '\nestado: ' + estado;
+}
+
+// ¿El slot start coincide EXACTAMENTE con un turno de la plantilla?
+function isTemplateSlot(start) {
+  const dow  = Number(Utilities.formatDate(start, CAL_TZ, 'u'));   // 1=Lun … 7=Dom
+  const hhmm = Utilities.formatDate(start, CAL_TZ, 'HH:mm');
+  const times = WEEKLY_SLOTS[dow] || [];
+  return times.indexOf(hhmm) >= 0;
+}
+
+// ¿El rango [start,end) está libre? Los holds vencidos NO bloquean.
+function isFree(cal, start, end) {
+  const events = cal.getEvents(start, end);
+  for (let i = 0; i < events.length; i++) {
+    if (isExpiredHold(events[i])) continue;
+    return false;
+  }
+  return true;
+}
+
+// ─── Acción: disponibilidad real ─────────────────────────────────────
+function checkAvailability(data) {
+  const cal = getCal();
+  const daysAhead = Math.min(Math.max(Number(data.daysAhead) || 14, 1), 30);
+  const now = new Date();
+  const minStart = now.getTime() + 60 * 60000; // no ofrecer slots a menos de 1h
+  const slots = [];
+
+  for (let i = 0; i <= daysAhead; i++) {
+    const day = new Date(now.getTime() + i * 86400000);
+    const y   = Number(Utilities.formatDate(day, CAL_TZ, 'yyyy'));
+    const mo  = Number(Utilities.formatDate(day, CAL_TZ, 'MM'));
+    const d   = Number(Utilities.formatDate(day, CAL_TZ, 'dd'));
+    const dow = Number(Utilities.formatDate(day, CAL_TZ, 'u'));
+    const times = WEEKLY_SLOTS[dow];
+    if (!times) continue;
+
+    for (let t = 0; t < times.length; t++) {
+      const start = slotDate(y, mo, d, times[t]);
+      if (start.getTime() < minStart) continue;
+      const end = new Date(start.getTime() + APPT_DURATION_MIN * 60000);
+      if (isFree(cal, start, end)) {
+        slots.push({ startISO: toLimaISO(start), endISO: toLimaISO(end) });
+      }
+    }
+  }
+  return { slots: slots, count: slots.length };
+}
+
+// ─── Acción: crear cita (hold tentativo por defecto) ─────────────────
+function createAppointment(data) {
+  const cal = getCal();
+  const phone = String(data.phone || '');
+  if (!phone)        throw new Error('phone requerido');
+  if (!data.startISO) throw new Error('startISO requerido');
+
+  const start = new Date(data.startISO);
+  if (isNaN(start.getTime())) return { ok: false, error: 'startISO inválido' };
+  if (!isTemplateSlot(start))  return { ok: false, error: 'ese horario no es un turno disponible' };
+
+  const end = new Date(start.getTime() + APPT_DURATION_MIN * 60000);
+  const tentative = data.tentative !== false; // default: hold
+
+  // Un solo hold activo por teléfono: liberar holds previos de este paciente.
+  releaseHoldsForPhone(cal, phone);
+
+  if (!isFree(cal, start, end)) return { ok: false, error: 'ese horario ya está ocupado' };
+
+  const nombre = data.nombre || 'Paciente';
+  const title  = (tentative ? HOLD_PREFIX : OK_PREFIX) + nombre;
+  const ev = cal.createEvent(title, start, end, {
+    description: buildDesc({ phone: phone, motivo: data.motivo, estado: tentative ? 'hold' : 'confirmada' }),
+  });
+  setColor(ev, tentative);
+
+  return {
+    ok: true,
+    eventId: ev.getId(),
+    startISO: toLimaISO(start),
+    estado: tentative ? 'hold' : 'confirmada',
+  };
+}
+
+function releaseHoldsForPhone(cal, phone) {
+  const now = new Date();
+  const horizon = new Date(now.getTime() + 90 * 86400000);
+  const events = cal.getEvents(now, horizon);
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (isHold(ev) && descPhone(ev) === phone) ev.deleteEvent();
+  }
+}
+
+// ─── Acción: confirmar el hold del paciente (tras el pago) ───────────
+function confirmAppointment(data) {
+  const cal = getCal();
+  const phone = String(data.phone || '');
+  if (!phone) throw new Error('phone requerido');
+
+  const now = new Date();
+  const horizon = new Date(now.getTime() + 90 * 86400000);
+  const events = cal.getEvents(now, horizon);
+  let target = null;
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (!isHold(ev) || descPhone(ev) !== phone || isExpiredHold(ev)) continue;
+    if (!target || ev.getStartTime() < target.getStartTime()) target = ev;
+  }
+  if (!target) return { ok: false, error: 'no hay hold activo para este paciente' };
+
+  const nombre = target.getTitle().replace(HOLD_PREFIX, '');
+  target.setTitle(OK_PREFIX + nombre);
+  target.setDescription(setEstadoInDesc(target.getDescription(), 'confirmada'));
+  setColor(target, false);
+
+  return { ok: true, startISO: toLimaISO(target.getStartTime()), nombre: nombre };
+}
+
+// ─── Acción: próxima cita del paciente ───────────────────────────────
+function getUpcoming(data) {
+  const cal = getCal();
+  const phone = String(data.phone || '');
+  if (!phone) throw new Error('phone requerido');
+
+  const now = new Date();
+  const horizon = new Date(now.getTime() + 90 * 86400000);
+  const events = cal.getEvents(now, horizon);
+  let next = null;
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (descPhone(ev) !== phone || isExpiredHold(ev)) continue;
+    if (!next || ev.getStartTime() < next.getStartTime()) next = ev;
+  }
+  if (!next) return { hasAppointment: false };
+
+  return {
+    hasAppointment: true,
+    startISO: toLimaISO(next.getStartTime()),
+    estado: isHold(next) ? 'hold' : 'confirmada',
+  };
+}
+
+// ─── Limpieza de holds vencidos (trigger horario) ────────────────────
+function expireHolds() {
+  const cal = getCal();
+  const now = new Date();
+  const past    = new Date(now.getTime() - 30 * 86400000);
+  const horizon = new Date(now.getTime() + 90 * 86400000);
+  const events = cal.getEvents(past, horizon);
+  let deleted = 0;
+  for (let i = 0; i < events.length; i++) {
+    if (isExpiredHold(events[i])) { events[i].deleteEvent(); deleted++; }
+  }
+  return { deleted: deleted };
 }

@@ -1,6 +1,6 @@
 // Núcleo de Mia: llama a OpenAI (cuenta de Mirai) con el prompt de Mia +
-// historial conversacional. En v1 sin tools de calendario (esas llegan en Fase 3);
-// solo info admin desde el prompt.
+// historial conversacional. Fase 3: tools de calendario conectadas al Apps
+// Script de Mirai (consulta disponibilidad real, hold tentativo, confirmar).
 //
 // Devuelve el formato de respuesta que el webhook ya sabe enviar:
 //   { messages: [{ channel, text }], escalar_mirai: bool, crisis: bool, razon: string }
@@ -8,15 +8,80 @@
 import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { MIA_SYSTEM_PROMPT, MIA_PROMPT_PLACEHOLDER } from './prompt.js';
 import { recentMessages } from './conversations.js';
+import { checkAvailability, createHold, confirmAppointment, getUpcoming } from './calendar.js';
 
-const MAX_TOOL_ROUNDS = 3; // sin tools en v1, pero el loop queda preparado
+const MAX_TOOL_ROUNDS = 4; // check → hold → (precio) → confirm caben en 4 rondas
 
-// Tools en v1: ninguna. Aquí se van a sumar check_calendar_availability,
-// create_appointment, get_upcoming_appointment en Fase 3.
-const MIA_TOOLS = [];
+// Tools de calendario (Fase 3). El `phone` NUNCA lo pone el modelo: lo inyecta
+// executeTool desde el paciente real, para que Mia no pueda agendar a otro número.
+const MIA_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'check_calendar_availability',
+      description: 'Consulta los turnos REALMENTE libres en la agenda de Mirai para los próximos días. Úsalo SIEMPRE antes de ofrecer horarios — nunca inventes disponibilidad. Devuelve solo slots libres con su etiqueta lista para mostrar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          dias_adelante: { type: 'integer', description: 'Cuántos días hacia adelante mirar (default 14, máx 30).' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_appointment_hold',
+      description: 'Aparta TENTATIVAMENTE (hold) un turno concreto para el paciente. El turno solo queda asegurado cuando el paciente paga. Llámalo cuando el paciente eligió uno de los horarios libres que ofreciste. Reemplaza cualquier hold previo del paciente.',
+      parameters: {
+        type: 'object',
+        properties: {
+          inicio_iso: { type: 'string', description: 'Inicio del turno en ISO 8601 con offset de Lima, ej "2026-06-22T16:00:00-05:00". DEBE ser uno de los slots devueltos por check_calendar_availability.' },
+          nombre: { type: 'string', description: 'Nombre del paciente (para el evento). Opcional.' },
+          motivo: { type: 'string', description: 'Motivo breve de consulta. Opcional.' },
+        },
+        required: ['inicio_iso'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'confirm_appointment',
+      description: 'Confirma la cita tentativa (hold) del paciente. Llámalo SOLO cuando el paciente ya envió el comprobante de pago (captura de Yape/Plin). Convierte el hold en cita confirmada.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_upcoming_appointment',
+      description: 'Consulta la próxima cita del paciente (confirmada o tentativa). Úsalo cuando el paciente pregunta cuándo es su cita o para recordar/reprogramar.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+];
 
-async function executeTool(name, args) {
-  return { ok: false, error: `Tool "${name}" no implementada todavía (Fase 3)` };
+// Ejecuta una tool. El `phone` se inyecta desde el paciente real (no del modelo).
+async function executeTool(name, args, { patient }) {
+  const phone = patient.phone;
+  switch (name) {
+    case 'check_calendar_availability':
+      return await checkAvailability({ daysAhead: args.dias_adelante });
+    case 'create_appointment_hold':
+      return await createHold({
+        phone,
+        startISO: args.inicio_iso,
+        nombre:   args.nombre || patient.nombre,
+        motivo:   args.motivo,
+      });
+    case 'confirm_appointment':
+      return await confirmAppointment({ phone });
+    case 'get_upcoming_appointment':
+      return await getUpcoming({ phone });
+    default:
+      return { ok: false, error: `Tool desconocida: ${name}` };
+  }
 }
 
 export async function askMia({ patient, message }) {
@@ -62,7 +127,7 @@ export async function askMia({ patient, message }) {
         let args = {};
         try { args = JSON.parse(call.function.arguments || '{}'); }
         catch { args = {}; }
-        const result = await executeTool(call.function.name, args);
+        const result = await executeTool(call.function.name, args, { patient });
         messages.push({
           role: 'tool',
           tool_call_id: call.id,
