@@ -72,6 +72,23 @@ export async function listActivePatients() {
   return data ?? [];
 }
 
+// Trae TODOS los leads/pacientes con los campos que el reporte necesita.
+// Sin filtro de estado (incluye alta/silenciada): el reporte los agrupa.
+// Volumen bajo — el límite por defecto de Supabase (1000 filas) sobra.
+export async function listAllForReport() {
+  if (!miraiSupabase) return [];
+  const { data, error } = await miraiSupabase
+    .from('patients')
+    .select('estado, etiqueta, fecha_alta')
+    .order('fecha_alta', { ascending: false });
+
+  if (error) {
+    console.error('[mia/patients] listAllForReport error:', error.message);
+    return [];
+  }
+  return data ?? [];
+}
+
 export async function removePatient(phone) {
   if (!miraiSupabase) throw new Error('Mia no está habilitado');
   const normalized = normalizePhone(phone);

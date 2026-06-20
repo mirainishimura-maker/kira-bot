@@ -56,6 +56,14 @@ export async function upsertLead(data) {
   return callSheet('upsertLead', { data: clean });
 }
 
+// Escribe/actualiza la pestaña "Reporte" de la hoja CRM con el resumen ya
+// calculado. Devuelve { url, tab } (el url de la hoja para mandárselo a Mirai)
+// o null si el CRM no está configurado / falló.
+export async function writeReport(report) {
+  if (!report) return null;
+  return callSheet('writeReport', { report });
+}
+
 export async function pingSheet() {
   return callSheet('ping', {});
 }

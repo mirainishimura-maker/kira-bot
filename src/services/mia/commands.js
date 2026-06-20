@@ -8,14 +8,16 @@
 //   /atender 51987654321 Nombre             (agrega lead_organico + envía saludo de bienvenida)
 //   /silenciar 51987654321                   (Mia deja de responderle — reversible)
 //   /activar 51987654321                     (Mia vuelve a responderle)
+//   /reporte                                 (resumen de leads en la hoja + WhatsApp)
 
 import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
 import { logMessage } from './conversations.js';
 import { sendText } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
+import { generateLeadReport } from './leadReport.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|reporte)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -46,6 +48,7 @@ export async function handleMiaCommand(text) {
     if (command === 'responder') return await cmdResponderEnNombreDeLead(rest);
     if (command === 'silenciar') return await cmdSilenciar(rest);
     if (command === 'activar')   return await cmdActivar(rest);
+    if (command === 'reporte')   return await cmdReporte();
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
   }
@@ -106,6 +109,18 @@ async function cmdAtenderLead(rest) {
     `Saludo enviado: ${enviadas}/${SALUDO_ORGANICO.length} burbujas.\n` +
     `Cuando responda, Mia toma el flujo de triage.`
   );
+}
+
+async function cmdReporte() {
+  const { text, sheetOk } = await generateLeadReport();
+  if (!sheetOk) {
+    return reply(
+      text +
+      '\n\n⚠️ Ojo: no pude actualizar la hoja (revisa que el Apps Script de la hoja esté desplegado). ' +
+      'El resumen de arriba sí está al día.'
+    );
+  }
+  return reply(text);
 }
 
 async function cmdAddPatient(rest) {
