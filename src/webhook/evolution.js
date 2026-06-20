@@ -76,6 +76,10 @@ async function processMessage(data) {
     return;
   }
 
+  // Modo Mia-only: KIRA-mkt no corre. Mia no atiende grupos, así que cualquier
+  // mensaje de grupo se ignora aquí mismo (el resto del flujo es solo Mia).
+  if (config.miaOnly && channel === CHANNEL_GROUP) return;
+
   // text puede ser null si llegó audio/imagen sin caption — para Mia eso se
   // procesa más abajo via multimodalToText. Para mkt, sin texto, ignoramos.
   const text = extractText(data);
@@ -165,7 +169,10 @@ async function processMessage(data) {
     const p = phoneFromJid(j);
     if (p) { phone = p; matchedJid = j; break; }
   }
-  const member = await findMemberByPhone(phone);
+  // En modo Mia-only no hay equipo de marketing: saltamos el lookup de miembros
+  // (usa el Supabase corporativo) y tratamos a todos como no-miembro → el flujo
+  // de abajo rutea a Mia (paciente / lead orgánico).
+  const member = config.miaOnly ? null : await findMemberByPhone(phone);
 
   if (!member) {
     // ¿Es paciente de Mirai (módulo Mia)? Solo en privado, solo si Mia activa.

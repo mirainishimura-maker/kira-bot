@@ -6,14 +6,27 @@ function required(name) {
   return value;
 }
 
+// MIA_ONLY=true → el proceso levanta SOLO el módulo Mia (triage de pacientes de
+// Mirai), sin KIRA-mkt. En ese modo las credenciales de la EMPRESA (Supabase y
+// OpenAI corporativos) dejan de ser obligatorias: Mia usa las suyas (MIRAI_*) y
+// la Evolution sigue siendo necesaria (Mia manda/recibe WhatsApp por ahí).
+const MIA_ONLY = process.env.MIA_ONLY === 'true';
+
+// Requerido salvo en modo Mia-only, donde KIRA-mkt no corre: devolvemos '' para
+// no romper el arranque cuando esa credencial corporativa no esté.
+function companyRequired(name) {
+  return MIA_ONLY ? (process.env[name] || '') : required(name);
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 3000),
   env: process.env.NODE_ENV ?? 'development',
   tz: process.env.TZ ?? 'America/Lima',
+  miaOnly: MIA_ONLY,
 
   supabase: {
-    url: required('SUPABASE_URL'),
-    serviceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
+    url: companyRequired('SUPABASE_URL'),
+    serviceRoleKey: companyRequired('SUPABASE_SERVICE_ROLE_KEY'),
   },
 
   evolution: {
@@ -25,7 +38,7 @@ export const config = {
   },
 
   openai: {
-    apiKey: required('OPENAI_API_KEY'),
+    apiKey: companyRequired('OPENAI_API_KEY'),
     model: process.env.OPENAI_MODEL ?? 'gpt-4.1',
   },
 
