@@ -113,6 +113,20 @@ async function evaluarPaciente(patient, now) {
   // está atendiendo manual, no nos metemos.
   if (last.author !== 'mia') return null;
 
+  // Si el paciente YA RESPONDIÓ a un recontacto (hay un mensaje suyo DESPUÉS de
+  // algún recontacto), se re-enganchó: NO se le manda más recontacto. De ahí en
+  // adelante lo atiende el flujo normal de triage / Mirai.
+  let ultimoRecontactoIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.author === 'mia' && m.metadata && m.metadata.kind === 'recontacto') { ultimoRecontactoIdx = i; break; }
+  }
+  if (ultimoRecontactoIdx >= 0) {
+    for (let i = ultimoRecontactoIdx + 1; i < msgs.length; i++) {
+      if (msgs[i].author === 'patient') return null; // contestó a un recontacto → stop
+    }
+  }
+
   // Último mensaje del paciente (para reiniciar el contador si respondió).
   let lastPatientTime = null;
   for (let i = msgs.length - 1; i >= 0; i--) {
