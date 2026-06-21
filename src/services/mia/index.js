@@ -14,7 +14,7 @@ import { config } from '../../config.js';
 import { sendText, sendImage } from '../../lib/evolution.js';
 import { askMia } from './ai.js';
 import { logMessage, shouldMiaBeSilent } from './conversations.js';
-import { touchPatientInteraction } from './patients.js';
+import { touchPatientInteraction, setPatientEstado } from './patients.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 
@@ -144,6 +144,14 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
       });
     } catch (err) {
       console.warn('[mia] no pude actualizar CRM con datos_lead:', err.message);
+    }
+
+    // Reflejar el avance del lead en patients.estado (Supabase). Lo usa el
+    // recontacto para NO molestar a quienes ya cerraron: cita_confirmada,
+    // agendado, rechazado, etc. Si el lead agendó, deja de ser candidato.
+    if (dl.estado) {
+      try { await setPatientEstado(patient.phone, dl.estado); }
+      catch (err) { console.warn('[mia] no pude actualizar patients.estado:', err.message); }
     }
   }
 

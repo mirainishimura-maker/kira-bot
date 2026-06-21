@@ -102,6 +102,17 @@ export const config = {
       images: {
         foto_sede: process.env.MIA_IMG_FOTO_SEDE || null,
       },
+      // Recontacto (follow-up automático de leads fríos). Apagado por defecto:
+      // solo manda WhatsApps si MIA_RECONTACTO_ENABLED=true. Las imágenes son
+      // una lista de URLs públicas separadas por coma (Mia las rota del 2º toque
+      // en adelante).
+      recontacto: {
+        enabled: process.env.MIA_RECONTACTO_ENABLED === 'true',
+        images: (process.env.MIA_RECONTACTO_IMG_URLS || '')
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean),
+      },
     };
   })(),
 };

@@ -7,6 +7,7 @@ import { runMiraiOpsCron } from './services/ops.js';
 import { findMemberByPhone } from './services/members.js';
 import { getMemberSpaceSlugs } from './services/spaces.js';
 import { ask } from './services/ai.js';
+import { startRecontactoCron, runRecontactoSweep } from './services/mia/recontacto.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -84,6 +85,24 @@ if (config.miaOnly && !config.mia.enabled) {
   process.exit(1);
 }
 
+// Recontacto de Mia: dry-run por defecto (calcula a quién contactaría sin
+// enviar). ?dry=false envía DE VERDAD, pero solo si MIA_RECONTACTO_ENABLED=true.
+// Funciona también en modo Mia-only. Protegido por WEBHOOK_SECRET.
+app.post('/admin/recontacto', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  const dry = !(req.query.dry === 'false' || req.query.dry === '0'); // dry por defecto
+  try {
+    const result = await runRecontactoSweep({ dry });
+    res.json(result);
+  } catch (err) {
+    console.error('[admin/recontacto] falló:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(config.port, () => {
   const mode = config.miaOnly ? 'MIA-ONLY (sin KIRA-mkt)' : 'completo (KIRA-mkt + Mia)';
   console.log(`[kira] escuchando en :${config.port} (${config.env}, TZ=${config.tz}) | modo: ${mode}`);
@@ -93,4 +112,6 @@ app.listen(config.port, () => {
   } else {
     startCrons();
   }
+  // Cron de recontacto de Mia (corre también en modo Mia-only).
+  if (config.mia.enabled) startRecontactoCron();
 });
