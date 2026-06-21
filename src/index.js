@@ -18,6 +18,8 @@ app.get('/health', (_req, res) => {
     service: 'kira-bot',
     mode: config.miaOnly ? 'mia-only' : 'full',
     miaEnabled: config.mia.enabled,
+    miaModel: config.mia.openai.model,
+    recontacto: config.mia.recontacto.enabled,
     env: config.env,
   });
 });
