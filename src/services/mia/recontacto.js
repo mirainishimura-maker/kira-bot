@@ -71,8 +71,32 @@ const PLANTILLAS = [
   ['¿Cómo has estado? Cada paso cuenta, incluso el primero'],
 ];
 
-function primerNombre(nombre) {
-  return String(nombre || '').trim().split(/\s+/)[0] || 'hola';
+// Muchos leads tienen el campo "nombre" sucio (capturado de su 1er mensaje:
+// "hola 🙋", "Lead pendiente", "paciente", "Mi nombre es Keren"...). Devolvemos
+// un primer nombre LIMPIO solo si parece de verdad; si no, null (sin nombre).
+const NOMBRE_BASURA = new Set([
+  'hola', 'lead', 'paciente', 'buenas', 'buenos', 'si', 'no', 'mi', 'soy',
+  'me', 'la', 'el', 'buen', 'dia', 'tarde', 'noche', 'hello', 'holi',
+]);
+function nombreValido(nombre) {
+  const first = String(nombre || '').trim().split(/\s+/)[0] || '';
+  if (!/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}$/.test(first)) return null; // emojis, números, 1 letra → no
+  if (NOMBRE_BASURA.has(first.toLowerCase())) return null;
+  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+}
+
+// Aplica {nombre} si hay nombre válido; si no, quita el placeholder y limpia.
+function aplicarNombre(texto, nombre) {
+  const n = nombreValido(nombre);
+  if (n) return texto.replaceAll('{nombre}', n);
+  return texto
+    .replaceAll('Hola {nombre}', 'Hola')
+    .replaceAll('{nombre}, ', '')
+    .replaceAll(', {nombre}', '')
+    .replaceAll('{nombre}', '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([?!.,])/g, '$1')
+    .trim();
 }
 
 // Pick estable (mismo paciente+toque → misma variante) sin Math.random.
@@ -177,8 +201,7 @@ async function enviarToque(patient, touch) {
   }
 
   // Texto (toques rápidos, o fallback si no hay imagen configurada para un notif).
-  const texto = pickVariante(PLANTILLAS[touch - 1], patient.phone, touch)
-    .replaceAll('{nombre}', primerNombre(patient.nombre));
+  const texto = aplicarNombre(pickVariante(PLANTILLAS[touch - 1], patient.phone, touch), patient.nombre);
   const sent = await sendText(jid, texto);
   const sentId = sent?.key?.id ?? null;
   if (sentId) rememberMiaSentId(sentId);
