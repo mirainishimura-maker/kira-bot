@@ -19,7 +19,7 @@ import {
   handleMiaMessage, handleMiraiManualOutbound, isMiaSentId,
 } from '../services/mia/index.js';
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
-import { transcribeAudio, describeImage } from '../services/mia/media.js';
+import { transcribeAudio, analizarImagenParaMia } from '../services/mia/media.js';
 import { detectLeadNote, handleLeadIntake } from '../services/mia/leadIntake.js';
 import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/organicLead.js';
 
@@ -321,9 +321,9 @@ async function multimodalToText(data) {
       return txt ? `[audio]: ${txt}` : null;
     }
     if (c.kind === 'image') {
-      const desc = await describeImage({ base64: media.base64, mimetype: media.mimetype, caption: c.caption });
-      const prefix = c.caption ? `[imagen, caption "${c.caption}"]` : '[imagen]';
-      return desc ? `${prefix}: ${desc}` : prefix;
+      // Analiza la imagen: si es comprobante de pago, verifica monto+destinatario
+      // y devuelve un veredicto claro para que Mia confirme (o no) la cita.
+      return await analizarImagenParaMia({ base64: media.base64, mimetype: media.mimetype, caption: c.caption });
     }
   }
 

@@ -118,6 +118,13 @@ export const config = {
       recordatorios: {
         enabled: process.env.MIA_RECORDATORIOS_ENABLED === 'true',
       },
+      // Pago esperado para confirmar una cita (verificación del comprobante).
+      // Defaults = primera consulta a Yape/Plin de Mirai. Configurable por env.
+      pago: {
+        monto:  Number(process.env.MIA_PAGO_MONTO || 75),
+        numero: (process.env.MIA_PAGO_NUMERO || '977668497').replace(/\D/g, ''),
+        nombre: process.env.MIA_PAGO_NOMBRE || 'Mirai Nishimura',
+      },
     };
   })(),
 };
