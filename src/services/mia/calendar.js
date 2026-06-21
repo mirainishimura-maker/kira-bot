@@ -196,3 +196,17 @@ export async function listUpcomingAppointments({ hoursAhead } = {}) {
   }));
   return { ok: true, appointments };
 }
+
+// Lista las citas CONFIRMADAS que YA TERMINARON (últimas `hoursBack` horas) —
+// para pedir reseña. → { ok, appointments: [{ inicio_iso, fin_iso, phone, etiqueta }] }
+export async function listFinishedAppointments({ hoursBack } = {}) {
+  const r = await callCal('listFinished', { hoursBack });
+  if (!r.ok) return { ok: false, error: r.error, appointments: [] };
+  const appointments = (r.data?.appointments ?? []).map(a => ({
+    inicio_iso: a.startISO,
+    fin_iso: a.endISO,
+    phone: a.phone,
+    etiqueta: slotLabel(a.startISO),
+  }));
+  return { ok: true, appointments };
+}

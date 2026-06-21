@@ -125,6 +125,12 @@ export const config = {
         numero: (process.env.MIA_PAGO_NUMERO || '977668497').replace(/\D/g, ''),
         nombre: process.env.MIA_PAGO_NOMBRE || 'Mirai Nishimura',
       },
+      // Pedir reseña en Google tras la sesión. Apagado por defecto; necesita el
+      // link de reseña (MIA_RESENA_URL) para poder mandarlo.
+      resenas: {
+        enabled: process.env.MIA_RESENA_ENABLED === 'true',
+        url: process.env.MIA_RESENA_URL || '',
+      },
     };
   })(),
 };

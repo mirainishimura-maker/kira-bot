@@ -98,6 +98,7 @@ function doPost(e) {
       case 'confirmAppointment': return ok(confirmAppointment(body.data || {}));
       case 'getUpcoming':        return ok(getUpcoming(body.data || {}));
       case 'listUpcoming':       return ok(listUpcoming(body.data || {}));
+      case 'listFinished':       return ok(listFinished(body.data || {}));
       case 'rescheduleAppointment': return ok(rescheduleAppointment(body.data || {}));
       case 'cancelAppointment':     return ok(cancelAppointment(body.data || {}));
       case 'expireHolds':        return ok(expireHolds());
@@ -564,6 +565,26 @@ function listUpcoming(data) {
     const phone = descPhone(ev);
     if (!phone) continue;              // solo eventos creados por Mia (tienen phone)
     out.push({ startISO: toLimaISO(ev.getStartTime()), phone: phone, titulo: ev.getTitle() });
+  }
+  return { appointments: out, count: out.length };
+}
+
+// ─── Acción: listar citas CONFIRMADAS que YA TERMINARON (para reseñas) ──
+// Devuelve las citas confirmadas cuyo fin cae en las últimas `hoursBack` horas.
+function listFinished(data) {
+  const cal = getCal();
+  const hoursBack = Math.min(Math.max(Number(data.hoursBack) || 24, 1), 24 * 30);
+  const now = new Date();
+  const from = new Date(now.getTime() - hoursBack * 3600000);
+  const events = cal.getEvents(from, now);
+  const out = [];
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (isHold(ev)) continue;                                  // solo confirmadas
+    const phone = descPhone(ev);
+    if (!phone) continue;                                      // solo creadas por Mia
+    if (ev.getEndTime().getTime() > now.getTime()) continue;   // que ya terminó
+    out.push({ startISO: toLimaISO(ev.getStartTime()), endISO: toLimaISO(ev.getEndTime()), phone: phone });
   }
   return { appointments: out, count: out.length };
 }
