@@ -110,6 +110,17 @@ async function publishCarousel(igId, token, imageUrls, caption) {
   return pub.id;
 }
 
+// Reel (video vertical 9:16). El contenedor tarda más en procesar (video),
+// por eso esperamos más intentos a que quede FINISHED antes de publicar.
+// share_to_feed=true → también aparece en el feed, no solo en la pestaña Reels.
+async function publishReel(igId, token, videoUrl, caption) {
+  const cont = await igPost(`${igId}/media`, { media_type: 'REELS', video_url: videoUrl, caption, share_to_feed: 'true' }, token);
+  const listo = await esperarListo(igId, cont.id, token, 40); // hasta ~2 min
+  if (!listo) console.warn('[neura] reel quizá no terminó de procesar; intento publicar igual…');
+  const pub = await igPost(`${igId}/media_publish`, { creation_id: cont.id }, token);
+  return pub.id;
+}
+
 // ─── Barrido: publica el PRÓXIMO pendiente de la cola ─────────────────
 // dry=true → solo dice qué publicaría, sin publicar.
 export async function runNeuraSweep({ dry = false } = {}) {
@@ -135,9 +146,14 @@ export async function runNeuraSweep({ dry = false } = {}) {
   try {
     const igId = config.neura.igUserId;
     const imgs = item.images || [];
-    const mediaId = (item.tipo === 'carousel' || imgs.length > 1)
-      ? await publishCarousel(igId, state.token, imgs, item.caption || '')
-      : await publishSingle(igId, state.token, imgs[0], item.caption || '');
+    let mediaId;
+    if (item.tipo === 'reel') {
+      mediaId = await publishReel(igId, state.token, item.video || imgs[0], item.caption || '');
+    } else if (item.tipo === 'carousel' || imgs.length > 1) {
+      mediaId = await publishCarousel(igId, state.token, imgs, item.caption || '');
+    } else {
+      mediaId = await publishSingle(igId, state.token, imgs[0], item.caption || '');
+    }
 
     item.posted = true;
     item.ig_media_id = mediaId;
@@ -167,5 +183,6 @@ export function startNeuraCron() {
   console.log(`[neura] cron activo | publica a las ${horas.join(', ')}h (${tz})`);
 }
 
-// Helpers exportados para el setup (subir imágenes + sembrar la cola).
-export { loadState, saveState };
+// Helpers exportados para el setup (subir imágenes + sembrar la cola) y para
+// publicar un reel puntual desde un script.
+export { loadState, saveState, publishReel };
