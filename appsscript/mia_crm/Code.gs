@@ -98,6 +98,8 @@ function doPost(e) {
       case 'confirmAppointment': return ok(confirmAppointment(body.data || {}));
       case 'getUpcoming':        return ok(getUpcoming(body.data || {}));
       case 'listUpcoming':       return ok(listUpcoming(body.data || {}));
+      case 'rescheduleAppointment': return ok(rescheduleAppointment(body.data || {}));
+      case 'cancelAppointment':     return ok(cancelAppointment(body.data || {}));
       case 'expireHolds':        return ok(expireHolds());
       default:            return err('unknown action: ' + body.action);
     }
@@ -564,6 +566,66 @@ function listUpcoming(data) {
     out.push({ startISO: toLimaISO(ev.getStartTime()), phone: phone, titulo: ev.getTitle() });
   }
   return { appointments: out, count: out.length };
+}
+
+// Encuentra la cita ACTIVA más próxima del paciente (hold o confirmada).
+function findActiveEventByPhone(cal, phone) {
+  const now = new Date();
+  const horizon = new Date(now.getTime() + 90 * 86400000);
+  const events = cal.getEvents(now, horizon);
+  let best = null;
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (descPhone(ev) !== phone || isExpiredHold(ev)) continue;
+    if (!best || ev.getStartTime() < best.getStartTime()) best = ev;
+  }
+  return best;
+}
+
+// ─── Acción: reprogramar la cita del paciente (conserva su estado) ───
+function rescheduleAppointment(data) {
+  const cal = getCal();
+  const phone = String(data.phone || '');
+  if (!phone)           throw new Error('phone requerido');
+  if (!data.newStartISO) throw new Error('newStartISO requerido');
+
+  const start = new Date(data.newStartISO);
+  if (isNaN(start.getTime())) return { ok: false, error: 'newStartISO inválido' };
+  if (!isTemplateSlot(start))  return { ok: false, error: 'ese horario no es un turno disponible' };
+
+  const actual = findActiveEventByPhone(cal, phone);
+  if (!actual) return { ok: false, error: 'no tiene cita activa para reprogramar' };
+
+  const confirmada = !isHold(actual);
+  const nombre = actual.getTitle().replace(HOLD_PREFIX, '').replace(OK_PREFIX, '');
+  const desc = actual.getDescription();
+  const end = new Date(start.getTime() + APPT_DURATION_MIN * 60000);
+
+  // El nuevo slot debe estar libre (la cita actual está en otro horario).
+  if (toLimaISO(actual.getStartTime()) !== toLimaISO(start) && !isFree(cal, start, end)) {
+    return { ok: false, error: 'ese horario ya está ocupado' };
+  }
+
+  actual.deleteEvent();
+  const ev = cal.createEvent((confirmada ? OK_PREFIX : HOLD_PREFIX) + nombre, start, end, { description: desc });
+  setColor(ev, !confirmada);
+
+  return { ok: true, startISO: toLimaISO(start), estado: confirmada ? 'confirmada' : 'hold', nombre: nombre };
+}
+
+// ─── Acción: cancelar la cita del paciente ───────────────────────────
+function cancelAppointment(data) {
+  const cal = getCal();
+  const phone = String(data.phone || '');
+  if (!phone) throw new Error('phone requerido');
+
+  const actual = findActiveEventByPhone(cal, phone);
+  if (!actual) return { ok: false, error: 'no tiene cita activa' };
+
+  const confirmada = !isHold(actual);
+  const startISO = toLimaISO(actual.getStartTime());
+  actual.deleteEvent();
+  return { ok: true, startISO: startISO, estado: confirmada ? 'confirmada' : 'hold' };
 }
 
 // ─── Limpieza de holds vencidos (trigger horario) ────────────────────

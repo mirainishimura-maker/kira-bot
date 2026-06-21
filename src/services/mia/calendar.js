@@ -158,6 +158,32 @@ export async function getUpcoming({ phone }) {
   };
 }
 
+// Reprograma la cita del paciente al nuevo slot (conserva hold/confirmada).
+// → { ok, inicio_iso, etiqueta, estado, nombre } | { ok:false, error }
+export async function rescheduleAppointment({ phone, newStartISO }) {
+  const r = await callCal('rescheduleAppointment', { phone, newStartISO });
+  if (!r.ok) return { ok: false, error: r.error };
+  return {
+    ok: true,
+    inicio_iso: r.data.startISO,
+    etiqueta: slotLabel(r.data.startISO),
+    estado: r.data.estado,
+    nombre: r.data.nombre,
+  };
+}
+
+// Cancela la cita activa del paciente. → { ok, inicio_iso, etiqueta, estado } | { ok:false, error }
+export async function cancelAppointment({ phone }) {
+  const r = await callCal('cancelAppointment', { phone });
+  if (!r.ok) return { ok: false, error: r.error };
+  return {
+    ok: true,
+    inicio_iso: r.data.startISO,
+    etiqueta: slotLabel(r.data.startISO),
+    estado: r.data.estado,
+  };
+}
+
 // Lista las citas CONFIRMADAS próximas (todas, con su teléfono) — para los
 // recordatorios. → { ok, appointments: [{ inicio_iso, phone, etiqueta }] }
 export async function listUpcomingAppointments({ hoursAhead } = {}) {

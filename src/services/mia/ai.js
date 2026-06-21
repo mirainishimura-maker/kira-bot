@@ -8,7 +8,7 @@
 import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { MIA_SYSTEM_PROMPT, MIA_PROMPT_PLACEHOLDER } from './prompt.js';
 import { recentMessages } from './conversations.js';
-import { checkAvailability, createHold, confirmAppointment, getUpcoming } from './calendar.js';
+import { checkAvailability, createHold, confirmAppointment, getUpcoming, rescheduleAppointment, cancelAppointment } from './calendar.js';
 
 const MAX_TOOL_ROUNDS = 4; // check → hold → (precio) → confirm caben en 4 rondas
 
@@ -60,6 +60,28 @@ const MIA_TOOLS = [
       parameters: { type: 'object', properties: {} },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'reschedule_appointment',
+      description: 'Reprograma (mueve) la cita actual del paciente a un nuevo horario. Conserva su estado (si estaba confirmada/pagada sigue confirmada; no se vuelve a pagar). Primero consulta disponibilidad y deja que el paciente elija; el nuevo horario DEBE ser uno de los slots libres.',
+      parameters: {
+        type: 'object',
+        properties: {
+          nuevo_inicio_iso: { type: 'string', description: 'Nuevo inicio en ISO 8601 con offset de Lima, ej "2026-06-25T15:00:00-05:00". Debe ser un slot libre de check_calendar_availability.' },
+        },
+        required: ['nuevo_inicio_iso'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'cancel_appointment',
+      description: 'Cancela la cita activa del paciente (hold o confirmada). Úsalo cuando el paciente quiere cancelar. Si la cita estaba pagada, además escala a la Psicóloga Mirai para que vea el tema del reembolso.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 // Ejecuta una tool. El `phone` se inyecta desde el paciente real (no del modelo).
@@ -79,6 +101,10 @@ async function executeTool(name, args, { patient }) {
       return await confirmAppointment({ phone });
     case 'get_upcoming_appointment':
       return await getUpcoming({ phone });
+    case 'reschedule_appointment':
+      return await rescheduleAppointment({ phone, newStartISO: args.nuevo_inicio_iso });
+    case 'cancel_appointment':
+      return await cancelAppointment({ phone });
     default:
       return { ok: false, error: `Tool desconocida: ${name}` };
   }
