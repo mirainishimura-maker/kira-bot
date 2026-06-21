@@ -157,3 +157,16 @@ export async function getUpcoming({ phone }) {
     estado: r.data.estado,
   };
 }
+
+// Lista las citas CONFIRMADAS próximas (todas, con su teléfono) — para los
+// recordatorios. → { ok, appointments: [{ inicio_iso, phone, etiqueta }] }
+export async function listUpcomingAppointments({ hoursAhead } = {}) {
+  const r = await callCal('listUpcoming', { hoursAhead });
+  if (!r.ok) return { ok: false, error: r.error, appointments: [] };
+  const appointments = (r.data?.appointments ?? []).map(a => ({
+    inicio_iso: a.startISO,
+    phone: a.phone,
+    etiqueta: slotLabel(a.startISO),
+  }));
+  return { ok: true, appointments };
+}

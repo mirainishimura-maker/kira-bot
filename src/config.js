@@ -113,6 +113,11 @@ export const config = {
           .map(s => s.trim())
           .filter(Boolean),
       },
+      // Recordatorios de cita (día antes + mismo día). Apagado por defecto:
+      // solo manda WhatsApps si MIA_RECORDATORIOS_ENABLED=true.
+      recordatorios: {
+        enabled: process.env.MIA_RECORDATORIOS_ENABLED === 'true',
+      },
     };
   })(),
 };

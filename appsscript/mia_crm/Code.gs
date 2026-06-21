@@ -97,6 +97,7 @@ function doPost(e) {
       case 'createAppointment':  return ok(createAppointment(body.data || {}));
       case 'confirmAppointment': return ok(confirmAppointment(body.data || {}));
       case 'getUpcoming':        return ok(getUpcoming(body.data || {}));
+      case 'listUpcoming':       return ok(listUpcoming(body.data || {}));
       case 'expireHolds':        return ok(expireHolds());
       default:            return err('unknown action: ' + body.action);
     }
@@ -543,6 +544,26 @@ function getUpcoming(data) {
     startISO: toLimaISO(next.getStartTime()),
     estado: isHold(next) ? 'hold' : 'confirmada',
   };
+}
+
+// ─── Acción: listar citas CONFIRMADAS próximas (para recordatorios) ──
+// Devuelve las citas confirmadas (no holds) creadas por Mia en las próximas
+// `hoursAhead` horas, con su teléfono. El bot decide a quién recordarle.
+function listUpcoming(data) {
+  const cal = getCal();
+  const hoursAhead = Math.min(Math.max(Number(data.hoursAhead) || 30, 1), 24 * 14);
+  const now = new Date();
+  const horizon = new Date(now.getTime() + hoursAhead * 3600000);
+  const events = cal.getEvents(now, horizon);
+  const out = [];
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (isHold(ev)) continue;          // solo CONFIRMADAS, no holds tentativos
+    const phone = descPhone(ev);
+    if (!phone) continue;              // solo eventos creados por Mia (tienen phone)
+    out.push({ startISO: toLimaISO(ev.getStartTime()), phone: phone, titulo: ev.getTitle() });
+  }
+  return { appointments: out, count: out.length };
 }
 
 // ─── Limpieza de holds vencidos (trigger horario) ────────────────────

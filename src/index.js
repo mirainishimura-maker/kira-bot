@@ -8,6 +8,7 @@ import { findMemberByPhone } from './services/members.js';
 import { getMemberSpaceSlugs } from './services/spaces.js';
 import { ask } from './services/ai.js';
 import { startRecontactoCron, runRecontactoSweep } from './services/mia/recontacto.js';
+import { startRecordatoriosCron, runRecordatoriosSweep } from './services/mia/recordatorios.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -20,6 +21,7 @@ app.get('/health', (_req, res) => {
     miaEnabled: config.mia.enabled,
     miaModel: config.mia.openai.model,
     recontacto: config.mia.recontacto.enabled,
+    recordatorios: config.mia.recordatorios.enabled,
     env: config.env,
   });
 });
@@ -105,6 +107,23 @@ app.post('/admin/recontacto', async (req, res) => {
   }
 });
 
+// Recordatorios de cita: dry-run por defecto. ?dry=false envía (solo si
+// MIA_RECORDATORIOS_ENABLED=true). Protegido por WEBHOOK_SECRET.
+app.post('/admin/recordatorios', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  const dry = !(req.query.dry === 'false' || req.query.dry === '0');
+  try {
+    const result = await runRecordatoriosSweep({ dry });
+    res.json(result);
+  } catch (err) {
+    console.error('[admin/recordatorios] falló:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(config.port, () => {
   const mode = config.miaOnly ? 'MIA-ONLY (sin KIRA-mkt)' : 'completo (KIRA-mkt + Mia)';
   console.log(`[kira] escuchando en :${config.port} (${config.env}, TZ=${config.tz}) | modo: ${mode}`);
@@ -114,6 +133,9 @@ app.listen(config.port, () => {
   } else {
     startCrons();
   }
-  // Cron de recontacto de Mia (corre también en modo Mia-only).
-  if (config.mia.enabled) startRecontactoCron();
+  // Crons de Mia (corren también en modo Mia-only).
+  if (config.mia.enabled) {
+    startRecontactoCron();
+    startRecordatoriosCron();
+  }
 });

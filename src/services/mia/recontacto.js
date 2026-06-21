@@ -22,6 +22,7 @@ import { recentMessages, logMessage } from './conversations.js';
 import { touchPatientInteraction } from './patients.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { getUpcoming } from './calendar.js';
+import { aplicarNombre, pickVariante } from './text.js';
 
 const HORA = 60 * 60 * 1000;
 const DIA = 24 * HORA;
@@ -70,42 +71,6 @@ const PLANTILLAS = [
   // 6 (+30d)
   ['¿Cómo has estado? Cada paso cuenta, incluso el primero'],
 ];
-
-// Muchos leads tienen el campo "nombre" sucio (capturado de su 1er mensaje:
-// "hola 🙋", "Lead pendiente", "paciente", "Mi nombre es Keren"...). Devolvemos
-// un primer nombre LIMPIO solo si parece de verdad; si no, null (sin nombre).
-const NOMBRE_BASURA = new Set([
-  'hola', 'lead', 'paciente', 'buenas', 'buenos', 'si', 'no', 'mi', 'soy',
-  'me', 'la', 'el', 'buen', 'dia', 'tarde', 'noche', 'hello', 'holi',
-]);
-function nombreValido(nombre) {
-  const first = String(nombre || '').trim().split(/\s+/)[0] || '';
-  if (!/^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}$/.test(first)) return null; // emojis, números, 1 letra → no
-  if (NOMBRE_BASURA.has(first.toLowerCase())) return null;
-  return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
-}
-
-// Aplica {nombre} si hay nombre válido; si no, quita el placeholder y limpia.
-function aplicarNombre(texto, nombre) {
-  const n = nombreValido(nombre);
-  if (n) return texto.replaceAll('{nombre}', n);
-  return texto
-    .replaceAll('Hola {nombre}', 'Hola')
-    .replaceAll('{nombre}, ', '')
-    .replaceAll(', {nombre}', '')
-    .replaceAll('{nombre}', '')
-    .replace(/\s{2,}/g, ' ')
-    .replace(/\s+([?!.,])/g, '$1')
-    .trim();
-}
-
-// Pick estable (mismo paciente+toque → misma variante) sin Math.random.
-function pickVariante(arr, phone, touch) {
-  if (arr.length === 1) return arr[0];
-  let h = touch;
-  for (const ch of String(phone)) h = (h * 31 + ch.charCodeAt(0)) % 100000;
-  return arr[h % arr.length];
-}
 
 // Notificación-imagen del toque: toques 4,5,6 → images[0],[1],[2].
 function imagenParaToque(touch) {
