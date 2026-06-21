@@ -312,13 +312,17 @@ const OK_PREFIX      = '✅ ';
 const CAL_PROP_KEY   = 'MIA_CALENDAR_ID';
 
 // Plantilla semanal de turnos posibles. Clave = día (ISO: 1=Lun … 7=Dom),
-// valor = horas "HH:mm" en hora de Lima. MANTENER EN SYNC con el prompt de Mia.
+// valor = horas "HH:mm" en hora de Lima. Estas son TODAS las horas en que Mirai
+// PODRÍA atender; Mia ofrece solo las que estén LIBRES en su Google Calendar
+// (lo que ella bloquee en su calendario, Mia lo saltea). MANTENER EN SYNC con
+// la lista de HORARIOS DE ATENCIÓN del prompt de Mia.
 const WEEKLY_SLOTS = {
-  1: ['16:00'],                   // Lunes
-  2: ['15:00', '16:00', '17:00'], // Martes
-  3: ['16:00'],                   // Miércoles
-  4: ['15:00', '16:00', '17:00'], // Jueves
-  6: ['08:00'],                   // Sábado
+  1: ['08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00'], // Lunes
+  2: ['08:00','09:00','10:00','11:00','12:00','13:00','15:00','16:00','17:00'],                 // Martes
+  3: ['08:00','09:00','10:00','11:00','12:00','13:00','17:00'],                                 // Miércoles
+  4: ['08:00','09:00','10:00','11:00','12:00','13:00','15:00','16:00','17:00','19:00'],         // Jueves
+  5: ['08:00','09:00','10:00','11:00','12:00','13:00'],                                         // Viernes
+  6: ['12:00','14:00'],                                                                         // Sábado
 };
 
 // ─── Resolución del calendario ───────────────────────────────────────
