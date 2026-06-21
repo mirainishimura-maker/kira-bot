@@ -1,17 +1,18 @@
 // Recontacto (follow-up) de leads que se enfriaron. Mia retoma sola, con
 // calidez y sin ser pesada, a los leads que quedaron a mitad de camino.
 //
-// Cadencia (configurable abajo): 1er toque a las 24h de quedar callado el lead,
-// 2do a +3 días, 3ro a +7 días, y una reactivación a +30 días. Máx esos toques.
-// El 1er toque va solo texto; del 2do en adelante suma una imagen cálida.
+// Cadencia (6 toques, gap desde el último mensaje):
+//   1 → 1h | 2 → +2h | 3 → +24h | 4 → +3d | 5 → +7d | 6 → +30d
+// Toques 1-3 (rápidos): mensaje de TEXTO personal (con el nombre).
+// Toques 4-6 (lentos): NOTIFICACIÓN-IMAGEN (la frase va dentro de la imagen).
 //
-// SEGURIDAD: solo envía si config.mia.recontacto.enabled === true. El modo
-// dry-run calcula a quién contactaría SIN enviar nada (para revisar antes).
+// SEGURIDAD: solo envía si config.mia.recontacto.enabled === true, y solo en la
+// ventana horaria permitida (8am–9pm Lima). El cron corre cada 30 min. El modo
+// dry-run calcula a quién contactaría SIN enviar nada.
 //
-// Estado por paciente: NO usa columnas nuevas — se calcula del log de
-// `conversations` (cuenta los mensajes con metadata.kind='recontacto' que se
-// mandaron DESPUÉS del último mensaje del paciente). Si el paciente responde,
-// el contador se reinicia solo.
+// Estado por paciente: se calcula del log de `conversations` (cuenta los
+// mensajes con metadata.kind='recontacto' posteriores al último mensaje del
+// paciente). Si el paciente responde, el contador se reinicia solo.
 
 import cron from 'node-cron';
 import { config } from '../../config.js';
@@ -25,10 +26,23 @@ import { getUpcoming } from './calendar.js';
 const HORA = 60 * 60 * 1000;
 const DIA = 24 * HORA;
 
-// Gaps por toque ya enviado → cuánto esperar para el siguiente.
-//   0 toques → 1er recontacto a las 24h | 1 → +3d | 2 → +7d | 3 → +30d (reactivación)
-const GAPS = [24 * HORA, 3 * DIA, 7 * DIA, 30 * DIA];
-const MAX_TOQUES = GAPS.length; // 4 (3 seguidos + 1 reactivación)
+// Cadencia + tipo de cada toque. gap = cuánto esperar desde el último mensaje.
+// notif=true → notificación-imagen (la frase está en la imagen, va sin texto).
+const TOQUES = [
+  { gap: 1 * HORA,  notif: false }, // 1
+  { gap: 2 * HORA,  notif: false }, // 2
+  { gap: 24 * HORA, notif: false }, // 3
+  { gap: 3 * DIA,   notif: true  }, // 4
+  { gap: 7 * DIA,   notif: true  }, // 5
+  { gap: 30 * DIA,  notif: true  }, // 6
+];
+const GAPS = TOQUES.map(t => t.gap);
+const MAX_TOQUES = TOQUES.length; // 6
+
+// Ventana horaria de ENVÍO (hora Lima). Fuera de esto no se manda (lo vencido
+// de madrugada espera al próximo tick dentro de hora).
+const HORA_INI = 8;   // 8 am
+const HORA_FIN = 21;  // 9 pm (no inclusive)
 
 // Estados que YA cerraron el ciclo (no se recontactan).
 const ESTADOS_EXCLUIDOS = new Set([
@@ -36,32 +50,25 @@ const ESTADOS_EXCLUIDOS = new Set([
   'alta', 'silenciada', 'no_responde',
 ]);
 
-// ─── Plantillas por toque (varían; se elige una de forma estable por paciente) ──
-// {nombre} se reemplaza por el primer nombre del paciente.
-// Estilo corto y cálido (tipo @ineswillis): poco texto, mucho sentimiento. La
-// frase va como burbuja de WhatsApp; del 2º toque en adelante la acompaña una
-// imagen que combina con la frase (manos / sillón / planta).
+// ─── Plantillas por toque ─────────────────────────────────────────────
+// Toques 1-3: texto personal (usan {nombre}). Toques 4-6: la frase que va
+// DENTRO de la notificación-imagen (sin emoji, sin {nombre} — la imagen es fija).
 const PLANTILLAS = [
-  // Toque 1 — recordatorio suave (sin imagen)
-  [
-    'Hola {nombre} 🌸 ¿retomamos cuando puedas? Aquí sigo para acompañarte 💛',
-    'Hola {nombre} ☺️ quedó algo pendiente y no quise dejarte sin seguimiento. ¿Seguimos cuando gustes? 🌸',
-  ],
-  // Toque 2 — manos / apoyo (con imagen)
-  [
-    'Dar el primer paso no siempre es fácil, y está bien ir a tu ritmo 💛',
-    'Pedir ayuda también es un acto de valentía 🌸',
-  ],
-  // Toque 3 — espacio seguro / sillón (con imagen). NEUTRO (m/f).
-  [
-    'Cuando sea tu momento, aquí hay un espacio para ti 🌸',
-    'Tu espacio sigue abierto, sin apuro 🌷',
-  ],
-  // Toque 4 — reactivación / planta (con imagen)
-  [
-    '¿Cómo has estado, {nombre}? Cada paso cuenta, incluso el primero 🌱',
-    'Hola {nombre} 🌷 pasó un tiempo y quería saber de ti. Aquí seguimos para acompañarte 💛',
-  ],
+  // 1 (1h)
+  ['Hola {nombre} 🌸 ¿seguimos? quedé pendiente de tu respuesta 💛',
+   '{nombre}, ¿te quedó alguna duda? Aquí sigo para ayudarte ☺️'],
+  // 2 (+2h)
+  ['{nombre}, cualquier cosa que necesites para decidir, aquí estoy 🌸',
+   '¿Te ayudo con algo más para coordinar, {nombre}? 💛'],
+  // 3 (+24h)
+  ['Hola {nombre} 🌸 ¿retomamos cuando puedas? Aquí estoy 💛',
+   'Hola {nombre} ☺️ quedó algo pendiente y no quise dejarte sin seguimiento. ¿Seguimos cuando gustes? 🌸'],
+  // 4 (+3d) — frase de la notificación-imagen
+  ['Dar el primer paso no siempre es fácil, y está bien ir a tu ritmo'],
+  // 5 (+7d)
+  ['Cuando sea tu momento, aquí hay un espacio para ti'],
+  // 6 (+30d)
+  ['¿Cómo has estado? Cada paso cuenta, incluso el primero'],
 ];
 
 function primerNombre(nombre) {
@@ -76,11 +83,20 @@ function pickVariante(arr, phone, touch) {
   return arr[h % arr.length];
 }
 
+// Notificación-imagen del toque: toques 4,5,6 → images[0],[1],[2].
 function imagenParaToque(touch) {
   const imgs = config.mia.recontacto.images;
-  if (!imgs.length) return null;
-  // touch 2,3,4 llevan imagen; rotamos por el índice del toque.
-  return imgs[(touch - 2) % imgs.length] || imgs[0];
+  return imgs[touch - 4] || null;
+}
+
+// ─── Hora Lima / ventana de envío ─────────────────────────────────────
+function horaLima(now) {
+  // 'sv-SE' da "YYYY-MM-DD HH:MM:SS" → la hora sale en slice(11,13).
+  return Number(new Date(now).toLocaleString('sv-SE', { timeZone: 'America/Lima' }).slice(11, 13));
+}
+function enHorarioPermitido(now) {
+  const h = horaLima(now);
+  return h >= HORA_INI && h < HORA_FIN;
 }
 
 // ─── Candidatos: pacientes en estado "abierto" (no cerrados) ──────────
@@ -98,15 +114,14 @@ async function listCandidatos() {
 }
 
 // ─── Decide el toque pendiente de un paciente (o null si no toca) ──────
-// Devuelve { touch, refTime } donde touch es el número (1..MAX) a enviar.
 async function evaluarPaciente(patient, now) {
   const msgs = await recentMessages(patient.id, 60); // cronológico asc
   if (!msgs.length) return null;
 
   const last = msgs[msgs.length - 1];
-  // Solo recontactamos si el último que habló fue MIA (nosotros, en automático).
-  // Si el último es el paciente → es nuestro turno de responder, no recontactar.
-  // Si el último es Mirai → ella está atendiendo manual, no nos metemos.
+  // Solo recontactamos si el último que habló fue MIA (en automático). Si el
+  // último es el paciente → es nuestro turno de responder. Si es Mirai → ella
+  // está atendiendo manual, no nos metemos.
   if (last.author !== 'mia') return null;
 
   // Último mensaje del paciente (para reiniciar el contador si respondió).
@@ -141,10 +156,29 @@ async function evaluarPaciente(patient, now) {
 // ─── Envía un toque concreto ──────────────────────────────────────────
 async function enviarToque(patient, touch) {
   const jid = `${patient.phone}@s.whatsapp.net`;
+  const esNotif = TOQUES[touch - 1].notif;
+  const url = esNotif ? imagenParaToque(touch) : null;
+
+  if (esNotif && url) {
+    // Notificación-imagen: la frase ya está en la imagen → mandamos solo la imagen.
+    const img = await sendImage(jid, url);
+    const imgId = img?.key?.id ?? null;
+    if (imgId) rememberMiaSentId(imgId);
+    await logMessage({
+      patientId: patient.id,
+      author: 'mia',
+      content: `[recontacto notif] ${PLANTILLAS[touch - 1][0]}`,
+      messageType: 'image',
+      whatsappMessageId: imgId,
+      metadata: { kind: 'recontacto', touch, image_url: url },
+    });
+    await touchPatientInteraction(patient.id, { authorCounted: 'mia' });
+    return;
+  }
+
+  // Texto (toques rápidos, o fallback si no hay imagen configurada para un notif).
   const texto = pickVariante(PLANTILLAS[touch - 1], patient.phone, touch)
     .replaceAll('{nombre}', primerNombre(patient.nombre));
-
-  // 1) Texto
   const sent = await sendText(jid, texto);
   const sentId = sent?.key?.id ?? null;
   if (sentId) rememberMiaSentId(sentId);
@@ -156,28 +190,6 @@ async function enviarToque(patient, touch) {
     metadata: { kind: 'recontacto', touch },
   });
   await touchPatientInteraction(patient.id, { authorCounted: 'mia' });
-
-  // 2) Imagen (del 2do toque en adelante, si hay set configurado)
-  if (touch >= 2) {
-    const url = imagenParaToque(touch);
-    if (url) {
-      try {
-        const img = await sendImage(jid, url);
-        const imgId = img?.key?.id ?? null;
-        if (imgId) rememberMiaSentId(imgId);
-        await logMessage({
-          patientId: patient.id,
-          author: 'mia',
-          content: `[imagen recontacto]`,
-          messageType: 'image',
-          whatsappMessageId: imgId,
-          metadata: { kind: 'recontacto', touch, image_url: url },
-        });
-      } catch (err) {
-        console.error(`[mia/recontacto] error enviando imagen a ${patient.nombre}:`, err.message);
-      }
-    }
-  }
 }
 
 // ─── Barrido principal ────────────────────────────────────────────────
@@ -198,7 +210,8 @@ export async function runRecontactoSweep({ dry = false } = {}) {
     }
   }
 
-  const enviar = !dry && config.mia.recontacto.enabled;
+  const enHora = enHorarioPermitido(now);
+  const enviar = !dry && config.mia.recontacto.enabled && enHora;
   const resultados = [];
   for (const { patient, touch } of aContactar) {
     if (enviar) {
@@ -214,19 +227,25 @@ export async function runRecontactoSweep({ dry = false } = {}) {
     }
   }
 
-  const modo = dry ? 'DRY-RUN' : (config.mia.recontacto.enabled ? 'ENVIANDO' : 'DESACTIVADO (no envía)');
+  let modo = 'DRY-RUN';
+  if (!dry) {
+    if (!config.mia.recontacto.enabled) modo = 'DESACTIVADO (no envía)';
+    else if (!enHora) modo = `FUERA DE HORARIO (${HORA_INI}-${HORA_FIN}h, no envía ahora)`;
+    else modo = 'ENVIANDO';
+  }
   console.log(`[mia/recontacto] ${modo} | candidatos=${candidatos.length} | a contactar=${aContactar.length}`);
   return {
     ok: true,
     dry,
     enabled: config.mia.recontacto.enabled,
+    enHorario: enHora,
     revisados: candidatos.length,
     aContactar: aContactar.length,
     detalle: resultados,
   };
 }
 
-// ─── Cron: ventanas de buena respuesta (11am y 7pm, lun-sáb, hora Lima) ──
+// ─── Cron: cada 30 min (envía solo en la ventana 8am–9pm) ─────────────
 export function startRecontactoCron() {
   if (!config.mia.recontacto.enabled) {
     console.log('[mia/recontacto] cron NO iniciado (MIA_RECONTACTO_ENABLED no está en true).');
@@ -237,8 +256,6 @@ export function startRecontactoCron() {
     try { await runRecontactoSweep({ dry: false }); }
     catch (err) { console.error('[mia/recontacto] sweep falló:', err); }
   };
-  // 11:00 y 19:00, de lunes a sábado (evitamos domingo).
-  cron.schedule('0 11 * * 1-6', job, { timezone: tz });
-  cron.schedule('0 19 * * 1-6', job, { timezone: tz });
-  console.log(`[mia/recontacto] cron activo | TZ=${tz} | 11:00 y 19:00 (lun-sáb)`);
+  cron.schedule('*/30 * * * *', job, { timezone: tz });
+  console.log(`[mia/recontacto] cron activo | cada 30 min | envía ${HORA_INI}:00–${HORA_FIN}:00 ${tz}`);
 }
