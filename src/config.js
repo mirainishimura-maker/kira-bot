@@ -133,4 +133,19 @@ export const config = {
       },
     };
   })(),
+
+  // NEURA — publicador automático del Instagram @neurapsi2026 (marca anónima de
+  // marketing para captar leads a Mia). Separado de Mia. Apagado salvo que esté
+  // configurado. Reusa el Supabase de Mirai (mismas credenciales MIRAI_*) para
+  // hostear imágenes y persistir la cola + el token (que se refresca solo).
+  neura: {
+    enabled: process.env.NEURA_ENABLED === 'true',
+    igUserId: process.env.NEURA_IG_USER_ID || '',
+    igTokenSeed: process.env.NEURA_IG_TOKEN || '', // token inicial; luego se refresca y persiste en el bucket privado
+    bucket: process.env.NEURA_BUCKET || 'neura',           // PÚBLICO — solo imágenes
+    stateBucket: process.env.NEURA_STATE_BUCKET || 'neura-state', // PRIVADO — token + cola
+    // Horas (Lima) en que publica. Default 3/día. Coma-separadas.
+    horas: (process.env.NEURA_HORAS || '9,14,20')
+      .split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n >= 0 && n < 24),
+  },
 };

@@ -10,6 +10,7 @@ import { ask } from './services/ai.js';
 import { startRecontactoCron, runRecontactoSweep } from './services/mia/recontacto.js';
 import { startRecordatoriosCron, runRecordatoriosSweep } from './services/mia/recordatorios.js';
 import { startResenasCron, runResenasSweep } from './services/mia/resenas.js';
+import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -143,6 +144,22 @@ app.post('/admin/resenas', async (req, res) => {
   }
 });
 
+// NEURA: publicar el próximo de la cola a Instagram. dry por defecto (solo
+// muestra cuál sigue). ?dry=false publica YA. Protegido por WEBHOOK_SECRET.
+app.post('/admin/neura', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  const dry = !(req.query.dry === 'false' || req.query.dry === '0');
+  try {
+    const result = await runNeuraSweep({ dry });
+    res.json(result);
+  } catch (err) {
+    console.error('[admin/neura] falló:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(config.port, () => {
   const mode = config.miaOnly ? 'MIA-ONLY (sin KIRA-mkt)' : 'completo (KIRA-mkt + Mia)';
   console.log(`[kira] escuchando en :${config.port} (${config.env}, TZ=${config.tz}) | modo: ${mode}`);
@@ -158,4 +175,6 @@ app.listen(config.port, () => {
     startRecordatoriosCron();
     startResenasCron();
   }
+  // NEURA (publicador de Instagram) — independiente de Mia, se auto-gatea.
+  startNeuraCron();
 });
