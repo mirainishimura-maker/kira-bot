@@ -25,8 +25,8 @@
 //      y el secret como MIA_SHEET_WEBHOOK_SECRET.
 //
 // SETUP DEL CALENDARIO (Fase 3 — hacer también una vez):
-//   8. Ejecutar setupCalendar()    → autoriza permisos de Calendar y crea el
-//      calendario dedicado "Mia — Citas" (verás su ID en el log).
+//   8. Ejecutar setupCalendar()    → autoriza permisos de Calendar y te muestra
+//      qué calendario usará Mia (tu calendario PRINCIPAL de Google).
 //   9. Ejecutar installHoldTrigger() → trigger horario que limpia holds vencidos.
 //  10. Re-deployar: Deploy → Manage deployments → (editar el deployment) →
 //      Version: New version → Deploy. Así las acciones de calendario quedan
@@ -278,8 +278,10 @@ function writeReport(report) {
 // CALENDARIO (Fase 3) — agenda de citas de Mirai vía CalendarApp
 // =====================================================================
 // Este Apps Script corre "como Mirai" (Execute as: Me), así que CalendarApp
-// crea/lee eventos en SU Google Calendar. Usamos un calendario dedicado
-// "Mia — Citas" (se autocrea la primera vez) para no ensuciar el personal.
+// lee/escribe en SU Google Calendar PRINCIPAL. Mia ve la agenda real de Mirai:
+// si el turno de la plantilla está libre en su calendario, lo ofrece; cuando se
+// agenda, el evento queda en su calendario. (Se puede apuntar a otro calendario
+// con la Script Property MIA_CALENDAR_ID — ver getCal().)
 //
 // MODELO DE CITA:
 //   - HOLD (tentativo): evento naranja, título "⏳ HOLD — <nombre>".
@@ -289,17 +291,18 @@ function writeReport(report) {
 //   - Un solo hold activo por teléfono: crear uno nuevo libera el anterior.
 //   - Un hold sin confirmar caduca a las HOLD_TTL_HORAS y deja de bloquear
 //     el slot (además expireHolds() los borra; instalar con installHoldTrigger()).
+//   - Mia solo toca eventos que ELLA creó (los identifica por el "phone" en la
+//     descripción), nunca tus eventos personales. Los de día completo no cuentan.
 //
 // SETUP CALENDARIO (una vez, desde el editor):
-//   1. Ejecutar setupCalendar()  → autoriza permisos de Calendar y crea
-//      el calendario "Mia — Citas". Verás su ID en el log.
+//   1. Ejecutar setupCalendar()  → autoriza permisos de Calendar y te dice qué
+//      calendario va a usar (tu principal). Verás su nombre/ID en el log.
 //   2. Ejecutar installHoldTrigger() → instala el trigger horario que
 //      limpia holds vencidos.
 //   3. Re-deployar el Web app (Deploy → Manage deployments → editar → New
 //      version) para que las nuevas acciones queden publicadas.
 // =====================================================================
 
-const CAL_NAME       = 'Mia — Citas';
 const CAL_TZ         = 'America/Lima';   // Perú es UTC-5 todo el año (sin DST)
 const CAL_OFFSET     = '-05:00';
 const APPT_DURATION_MIN = 45;            // primera consulta: bloque de 45 min
@@ -318,27 +321,27 @@ const WEEKLY_SLOTS = {
   6: ['08:00'],                   // Sábado
 };
 
-// ─── Resolución del calendario dedicado ──────────────────────────────
+// ─── Resolución del calendario ───────────────────────────────────────
+// Por defecto Mia usa el calendario PRINCIPAL de Mirai (este Apps Script corre
+// "como ella"), así ve su agenda REAL: si el turno está libre en SU calendario
+// lo ofrece, y cuando se agenda el evento aparece en SU calendario.
+// Override opcional: si seteás la Script Property MIA_CALENDAR_ID con el ID de
+// otro calendario, usa ése en lugar del principal.
 function getCal() {
-  const props = PropertiesService.getScriptProperties();
-  const id = props.getProperty(CAL_PROP_KEY);
+  const id = PropertiesService.getScriptProperties().getProperty(CAL_PROP_KEY);
   if (id) {
     const c = CalendarApp.getCalendarById(id);
     if (c) return c;
   }
-  const existing = CalendarApp.getCalendarsByName(CAL_NAME);
-  const cal = (existing && existing.length)
-    ? existing[0]
-    : CalendarApp.createCalendar(CAL_NAME, { timeZone: CAL_TZ });
-  props.setProperty(CAL_PROP_KEY, cal.getId());
-  return cal;
+  return CalendarApp.getDefaultCalendar();
 }
 
 function setupCalendar() {
   const cal = getCal();
-  Logger.log('Calendario listo: "' + cal.getName() + '"');
-  Logger.log('ID (guardado en Script Properties como ' + CAL_PROP_KEY + '): ' + cal.getId());
-  return 'OK — calendario "' + CAL_NAME + '" listo.';
+  Logger.log('Mia leerá/escribirá en tu calendario: "' + cal.getName() + '"');
+  Logger.log('ID: ' + cal.getId());
+  Logger.log('(Si querés que use OTRO calendario, seteá la Script Property MIA_CALENDAR_ID con su ID.)');
+  return 'OK — Mia usará el calendario: ' + cal.getName();
 }
 
 function installHoldTrigger() {
@@ -400,11 +403,17 @@ function isTemplateSlot(start) {
   return times.indexOf(hhmm) >= 0;
 }
 
-// ¿El rango [start,end) está libre? Los holds vencidos NO bloquean.
+// ¿El rango [start,end) está libre en el calendario de Mirai?
+// - Los eventos de DÍA COMPLETO (cumpleaños, recordatorios) NO bloquean —
+//   suelen ser informativos y bloquearían turnos sin sentido.
+// - Los holds vencidos NO bloquean (se liberan solos).
+// - Cualquier otro evento con hora (cita real, compromiso de Mirai) SÍ bloquea.
 function isFree(cal, start, end) {
   const events = cal.getEvents(start, end);
   for (let i = 0; i < events.length; i++) {
-    if (isExpiredHold(events[i])) continue;
+    const ev = events[i];
+    if (ev.isAllDayEvent()) continue;
+    if (isExpiredHold(ev)) continue;
     return false;
   }
   return true;
