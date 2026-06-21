@@ -60,16 +60,61 @@ export function slotLabel(iso) {
   }
 }
 
-// Devuelve los slots libres ya con etiqueta lista para que Mia los ofrezca.
-// → { ok, slots: [{ inicio_iso, etiqueta }], count }
+// Une opciones con comas y "o" antes de la última: ["9","10","11"] → "9, 10 o 11".
+function joinOpciones(arr) {
+  if (arr.length <= 1) return arr[0] || '';
+  return arr.slice(0, -1).join(', ') + ' o ' + arr[arr.length - 1];
+}
+
+// Formatea las horas de un día. inicio_iso viene en hora Lima ("...T09:00:00-05:00"),
+// así que la hora de pared se lee directo del string. Si todas son am o todas pm,
+// el meridiano va una sola vez al final: "8, 9 o 10 am". Si están mezcladas, en cada
+// una: "11 am o 1 pm".
+function formatTimes(isos) {
+  const parts = isos.map((iso) => {
+    const h24 = parseInt(iso.slice(11, 13), 10);
+    const min = iso.slice(14, 16);
+    const h12 = (h24 % 12) || 12;
+    const mer = h24 < 12 ? 'am' : 'pm';
+    return { label: min === '00' ? String(h12) : `${h12}:${min}`, mer };
+  });
+  const allSame = parts.every((p) => p.mer === parts[0].mer);
+  if (allSame) return joinOpciones(parts.map((p) => p.label)) + ' ' + parts[0].mer;
+  return joinOpciones(parts.map((p) => `${p.label} ${p.mer}`));
+}
+
+// Arma el bloque de horarios YA FORMATEADO y prolijo (para que el modelo lo
+// pegue TAL CUAL y no lo desordene). Un día por línea, día en *negrita* de
+// WhatsApp, máx `maxDays` días y `maxPerDay` horas por día.
+//   "*Lunes 22:* 9, 10 o 11 am\n*Martes 23:* 8, 10 o 11 am"
+function buildResumen(slots, maxDays = 4, maxPerDay = 3) {
+  const byDay = new Map();
+  for (const s of slots) {
+    const key = s.inicio_iso.slice(0, 10); // fecha Lima (el iso ya está en -05:00)
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(s.inicio_iso);
+  }
+  const lines = [...byDay.keys()].sort().slice(0, maxDays).map((key) => {
+    const isos = byDay.get(key).slice(0, maxPerDay);
+    let dia = new Date(isos[0]).toLocaleDateString('es-PE', {
+      weekday: 'long', day: 'numeric', timeZone: 'America/Lima',
+    });
+    dia = dia.charAt(0).toUpperCase() + dia.slice(1);
+    return `*${dia}:* ${formatTimes(isos)}`;
+  });
+  return lines.join('\n');
+}
+
+// Devuelve los slots libres + un `resumen` ya formateado listo para enviar.
+// → { ok, slots: [{ inicio_iso, etiqueta }], count, resumen }
 export async function checkAvailability({ daysAhead } = {}) {
   const r = await callCal('checkAvailability', { daysAhead });
-  if (!r.ok) return { ok: false, error: r.error, slots: [] };
+  if (!r.ok) return { ok: false, error: r.error, slots: [], resumen: '' };
   const slots = (r.data?.slots ?? []).map(s => ({
     inicio_iso: s.startISO,
     etiqueta: slotLabel(s.startISO),
   }));
-  return { ok: true, slots, count: slots.length };
+  return { ok: true, slots, count: slots.length, resumen: buildResumen(slots) };
 }
 
 // Crea un HOLD tentativo (default) o una cita confirmada (tentative:false).

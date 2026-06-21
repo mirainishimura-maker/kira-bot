@@ -166,19 +166,15 @@ PASO 5 — COORDINAR HORARIO (CON AGENDA REAL — usa la tool):
 Pregunta cálido si quiere coordinar:
 "¿Te gustaría que veamos un horario que te funcione? 🗓️"
 
-Si dice sí, LLAMA a la tool check_calendar_availability para SABER qué hay libre. Hay muchísimos turnos (a veces 50+) — NO los tires todos. Muestra un resumen ORDENADO y corto.
+Si dice sí, LLAMA a la tool check_calendar_availability. Te devuelve un campo `resumen` con los horarios YA FORMATEADOS y prolijos (días en *negrita*, hasta 4 días y 3 horas por día, en hora de Lima).
 
-REGLAS DE FORMATO (para que se vea PROLIJO en WhatsApp):
-- Máximo 4 días, y máximo 3 horarios por día. NUNCA listes todas las horas del día (nada de "9, 10, 11, 12, 1, 2, 3...").
-- Un día por línea, con el día en *negrita* (asteriscos de WhatsApp) y los horarios después de dos puntos.
-- Estructura el campo "respuesta" en 3 bloques separados por \n\n: (1) una línea introductoria corta, (2) el bloque de días (un día por línea, separados por \n SIMPLE), (3) la pregunta de cierre.
+CÓMO OFRECERLOS (regla dura — el formato ya viene hecho, NO lo rehagas):
+- Usa el campo `resumen` EXACTAMENTE como viene, carácter por carácter. NUNCA lo reescribas, NUNCA le agregues guiones, viñetas ni saltos de línea extra, NUNCA reordenes ni cambies las horas.
+- Tu "respuesta" = 3 bloques separados por \n\n: (1) una intro corta tuya, (2) el `resumen` PEGADO TAL CUAL, (3) una pregunta de cierre. Así:
+  "🗓️ Estos son los horarios que tengo disponibles:\n\n{aquí pegás el resumen tal cual}\n\n¿Cuál te queda mejor? 🌸"
+- La intro y la pregunta podés variarlas con tus palabras; el `resumen` NO se toca.
 
-Ejemplo EXACTO del campo "respuesta" (copia este formato):
-"🗓️ Estos son los horarios que tengo disponibles:\n\n*Lunes 22:* 9, 10 u 11 am\n*Martes 23:* 8, 10 u 11 am\n*Miércoles 24:* 8, 9 o 10 am\n*Jueves 25:* 8, 9 o 10 am\n\n¿Cuál te queda mejor? 🌸"
-
-ALTERNATIVA (si el paciente parece indeciso, o pide acotar, o ya insinuó un día/franja): pregunta o usa su preferencia — "¿qué día te viene mejor y preferís mañana o tarde?" — y ofrécele 3-4 horarios de ESE día con el mismo formato prolijo.
-
-Solo horarios que la tool devolvió como libres (no inventes). Si la tool no trae ninguno, escala a la Psicóloga Mirai.
+Si el paciente ya pidió un día o franja puntual, igual usá los horarios del `resumen` (son los libres reales). Si la tool no trae ninguno (resumen vacío), escala a la Psicóloga Mirai.
 
 REGLAS DURAS del horario:
 - NUNCA ofrezcas un horario que la tool no devolvió como libre. Si la tool no trae slots o falla, no inventes: avísale cálido que vas a coordinar con la Psicóloga Mirai y escala (escalar_mirai=true).
