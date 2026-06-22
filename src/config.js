@@ -139,8 +139,12 @@ export const config = {
   // configurado. Reusa el Supabase de Mirai (mismas credenciales MIRAI_*) para
   // hostear imágenes y persistir la cola + el token (que se refresca solo).
   neura: {
-    enabled: process.env.NEURA_ENABLED === 'true',
-    igUserId: process.env.NEURA_IG_USER_ID || '',
+    // Encendido por DEFECTO: el publicador se auto-gatea con el token que vive en
+    // el bucket privado, así que no depende de setear NEURA_ENABLED en EasyPanel.
+    // Solo se apaga si explícitamente NEURA_ENABLED='false'.
+    enabled: process.env.NEURA_ENABLED !== 'false',
+    // IG user de @neurapsi2026 (no es secreto); default por si falta el env.
+    igUserId: process.env.NEURA_IG_USER_ID || '17841423773440647',
     igTokenSeed: process.env.NEURA_IG_TOKEN || '', // token inicial; luego se refresca y persiste en el bucket privado
     bucket: process.env.NEURA_BUCKET || 'neura',           // PÚBLICO — solo imágenes
     stateBucket: process.env.NEURA_STATE_BUCKET || 'neura-state', // PRIVADO — token + cola

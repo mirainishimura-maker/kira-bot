@@ -184,5 +184,5 @@ export function startNeuraCron() {
 }
 
 // Helpers exportados para el setup (subir imágenes + sembrar la cola) y para
-// publicar un reel puntual desde un script.
-export { loadState, saveState, publishReel };
+// publicar contenido puntual desde un script (reel, single o carrusel).
+export { loadState, saveState, publishReel, publishSingle, publishCarousel };
