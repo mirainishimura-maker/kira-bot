@@ -131,6 +131,12 @@ export const config = {
         enabled: process.env.MIA_RESENA_ENABLED === 'true',
         url: process.env.MIA_RESENA_URL || '',
       },
+      // Lead magnet (guía gratis en PDF) que Mia envía cuando un lead la pide.
+      // URL pública por defecto (no secreta) → no depende de setear env en EasyPanel.
+      guia: {
+        url: process.env.MIA_GUIA_URL || 'https://bnhurojxksuvdgraocoh.supabase.co/storage/v1/object/public/neura/guias/calma-tu-ansiedad.pdf',
+        nombre: process.env.MIA_GUIA_NOMBRE || 'NEURA · Calma tu ansiedad.pdf',
+      },
     };
   })(),
 

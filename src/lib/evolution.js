@@ -48,6 +48,18 @@ export function sendImage(jid, imageUrl, caption = '') {
   });
 }
 
+// Envía un documento (PDF, etc.) por URL pública a un JID. fileName define cómo
+// se ve el archivo en WhatsApp.
+export function sendDocument(jid, url, fileName, caption = '') {
+  return call(`/message/sendMedia/${instance}`, 'POST', {
+    number: jid,
+    mediatype: 'document',
+    media: url,
+    fileName,
+    caption,
+  });
+}
+
 // Descarga el media (audio/imagen/video) de un mensaje en formato base64.
 // Recibe el "message" completo tal como vino en el webhook (con key + message).
 // Devuelve { base64, mimetype, fileName } o null si falla.

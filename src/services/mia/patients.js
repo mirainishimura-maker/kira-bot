@@ -56,6 +56,33 @@ export async function addPatient({ phone, nombre, etiqueta }) {
   return { duplicated: false, patient: data };
 }
 
+// Auto-intake (embudo NEURA): crea un lead automáticamente cuando un número
+// NUEVO escribe. No exige nombre (el lead aún no lo dio). Si ya existía por una
+// carrera de mensajes, lo devuelve. Devuelve null si falla (el webhook ignora).
+export async function createLeadAuto({ phone, nombre }) {
+  if (!miraiSupabase) return null;
+  const normalized = normalizePhone(phone);
+  if (!normalized) return null;
+
+  const { data, error } = await miraiSupabase
+    .from('patients')
+    .insert({
+      phone: normalized,
+      nombre: (nombre && nombre.trim()) ? nombre.trim() : 'Nuevo lead',
+      etiqueta: 'lead_organico',
+      estado: 'nuevo',
+    })
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === '23505') return await findPatientByPhone(normalized); // carrera: ya existía
+    console.error('[mia/patients] createLeadAuto error:', error.message);
+    return null;
+  }
+  return data;
+}
+
 export async function listActivePatients() {
   if (!miraiSupabase) return [];
   const { data, error } = await miraiSupabase

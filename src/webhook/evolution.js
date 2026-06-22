@@ -22,6 +22,8 @@ import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, analizarImagenParaMia } from '../services/mia/media.js';
 import { detectLeadNote, handleLeadIntake } from '../services/mia/leadIntake.js';
 import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/organicLead.js';
+import { createLeadAuto } from '../services/mia/patients.js';
+import { nombreValido } from '../services/mia/text.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -204,18 +206,37 @@ async function processMessage(data) {
         return;
       }
 
-      // No es paciente conocido. ¿Parece lead orgánico (keywords de consulta)?
-      // Si sí, notificar a Mirai en su personal con comando pre-armado.
-      if (text && detectOrganicLead(text)) {
-        const pushName = data?.pushName ?? null;
-        console.log(`[webhook] lead orgánico potencial | ${phone} (${pushName}) — notificando a Mirai`);
-        try {
-          await notifyMiraiAboutOrganicLead({ phone, pushName, text });
-        } catch (err) {
-          console.error('[webhook] error notificando lead orgánico:', err.message);
-        }
+      // No es paciente conocido → AUTO-INTAKE (embudo NEURA): registramos el
+      // número nuevo como lead orgánico y dejamos que Mia lo atienda sola
+      // (saludo + guía si la pide + triage). Antes solo se notificaba a Mirai.
+      // Guard: nunca auto-intakear a Mirai ni a operadores (si escribieron algo
+      // que no es comando/nota, su mensaje lo ve Mirai en kiramkt — silencio).
+      if (phone === config.mia.personalPhone || config.mia.operatorPhones.includes(phone)) {
+        console.log(`[webhook] ${phone} = Mirai/operador (sin comando/nota) — silencio.`);
         return;
       }
+      const leadText = await multimodalToText(data);
+      if (!leadText) {
+        console.warn(`[webhook] número nuevo ${phone} sin texto útil — ignorando`);
+        return;
+      }
+      const pushName = data?.pushName ?? null;
+      const lead = await createLeadAuto({ phone, nombre: nombreValido(pushName) ? pushName : null });
+      if (!lead) {
+        console.warn(`[webhook] no pude crear el lead ${phone} — ignorando`);
+        return;
+      }
+      console.log(`[webhook] AUTO-INTAKE | nuevo lead "${pushName ?? ''}" (${phone}) → Mia`);
+      enqueueMiaMessage({
+        patient: lead,
+        text: leadText,
+        messageId,
+        senderJid: remoteJid,
+        debounceMs: config.mia.debounceMs,
+        debounceMaxMs: config.mia.debounceMaxMs,
+        onFlush: handleMiaMessage,
+      });
+      return;
     }
     console.log(`[webhook] no identificado | channel=${channel} | tried=${JSON.stringify(candidateJids)} | parsed=${phone} | pushName=${data?.pushName ?? '?'}`);
     return;

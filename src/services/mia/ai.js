@@ -7,8 +7,11 @@
 
 import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { MIA_SYSTEM_PROMPT, MIA_PROMPT_PLACEHOLDER } from './prompt.js';
-import { recentMessages } from './conversations.js';
+import { recentMessages, logMessage } from './conversations.js';
 import { checkAvailability, createHold, confirmAppointment, getUpcoming, rescheduleAppointment, cancelAppointment } from './calendar.js';
+import { sendDocument } from '../../lib/evolution.js';
+import { rememberMiaSentId } from './echoTracker.js';
+import { config } from '../../config.js';
 
 const MAX_TOOL_ROUNDS = 4; // check → hold → (precio) → confirm caben en 4 rondas
 
@@ -82,6 +85,14 @@ const MIA_TOOLS = [
       parameters: { type: 'object', properties: {} },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'send_guide',
+      description: 'Envía al paciente la GUÍA GRATIS en PDF "Calma tu ansiedad — 5 ejercicios para hacer hoy". Úsalo cuando el lead la pide, escribe "guía"/"GUIA"/"quiero la guía", o llega preguntando por los ejercicios gratis (viene de un anuncio). Tras enviarla, salúdalo cálido y sigue el triage suave, sin presionar.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
 ];
 
 // Ejecuta una tool. El `phone` se inyecta desde el paciente real (no del modelo).
@@ -105,8 +116,32 @@ async function executeTool(name, args, { patient }) {
       return await rescheduleAppointment({ phone, newStartISO: args.nuevo_inicio_iso });
     case 'cancel_appointment':
       return await cancelAppointment({ phone });
+    case 'send_guide':
+      return await sendGuide({ patient });
     default:
       return { ok: false, error: `Tool desconocida: ${name}` };
+  }
+}
+
+// Envía el lead magnet (PDF) al paciente por WhatsApp y lo registra en el historial.
+async function sendGuide({ patient }) {
+  if (!config.mia.guia?.url) return { ok: false, error: 'guía no configurada' };
+  const jid = `${patient.phone}@s.whatsapp.net`;
+  try {
+    const sent = await sendDocument(jid, config.mia.guia.url, config.mia.guia.nombre, '');
+    const id = sent?.key?.id ?? null;
+    if (id) rememberMiaSentId(id);
+    await logMessage({
+      patientId: patient.id,
+      author: 'mia',
+      content: '[guía gratis enviada: Calma tu ansiedad]',
+      whatsappMessageId: id,
+      metadata: { kind: 'guia' },
+    });
+    return { ok: true, sent: true };
+  } catch (err) {
+    console.error('[mia/ai] send_guide falló:', err.message);
+    return { ok: false, error: err.message };
   }
 }
 
