@@ -12,7 +12,10 @@ import { sendText } from '../../lib/evolution.js';
 // Keywords que sugieren que el mensaje es de un posible lead.
 // Lista pensada en español peruano + términos clínicos comunes.
 // Sin \b al final para que matchee terminaciones como "consulta", "psicóloga", etc.
-const LEAD_KEYWORDS = /\b(consult\w*|sesi[oó]n\w*|terapia\w*|terapeut\w*|psic[oó]log\w*|psicolog\w*|ansiedad\w*|depresi[oó]n|depre\w*|emdr|trauma\w*|autoestima\w*|duelo\w*|p[aá]nico\w*|crisis|agendar|agenda\w*|cita\w*|atenci[oó]n|ayuda\w*|ay[úu]dame\w*|info\w*|precio\w*|costo\w*|cuesta\w*|inversi[oó]n\w*|emocional\w*|pareja\w*|familiar\w*|s[aá]nar\w*|gu[íi]a\w*|ejercicio\w*|estr[eé]s\w*|insomnio\w*)\b/i;
+// Keywords que sugieren INTENCIÓN clara de lead (clínicas + de agenda + del
+// embudo de la guía). Se quitaron las genéricas ("ayuda", "info", "atención")
+// para no auto-responder a contactos viejos que escriben cosas casuales.
+const LEAD_KEYWORDS = /\b(consult\w*|sesi[oó]n\w*|terapia\w*|terapeut\w*|psic[oó]log\w*|psicolog\w*|ansiedad\w*|depresi[oó]n|depre\w*|emdr|trauma\w*|autoestima\w*|duelo\w*|p[aá]nico\w*|crisis|agendar|agenda\w*|cita\w*|reserv\w*|precio\w*|costo\w*|cuesta\w*|inversi[oó]n\w*|s[aá]nar\w*|gu[íi]a\w*|ejercicio\w*|estr[eé]s\w*|insomnio\w*)\b/i;
 
 const NOTIFIED_RECENTLY = new Map(); // phone -> expiresAt
 const DEDUP_TTL_MS = 60 * 60 * 1000; // 1h
