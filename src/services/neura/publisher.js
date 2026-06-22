@@ -94,6 +94,7 @@ async function esperarListo(igId, containerId, token, intentos = 10) {
 
 async function publishSingle(igId, token, imageUrl, caption) {
   const cont = await igPost(`${igId}/media`, { image_url: imageUrl, caption }, token);
+  await esperarListo(igId, cont.id, token); // esperar a que IG termine de procesar la imagen
   const pub = await igPost(`${igId}/media_publish`, { creation_id: cont.id }, token);
   return pub.id;
 }
