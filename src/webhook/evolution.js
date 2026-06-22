@@ -216,8 +216,11 @@ async function processMessage(data) {
         return;
       }
       const leadText = await multimodalToText(data);
-      if (!leadText) {
-        console.warn(`[webhook] número nuevo ${phone} sin texto útil — ignorando`);
+      // SOLO auto-intake si el mensaje muestra INTENCIÓN de lead (consulta, guía,
+      // ansiedad, cita, precio...). Así Mia NO responde a contactos viejos que
+      // escriben cosas casuales ("hola", "feliz cumple", etc.) — solo a leads reales.
+      if (!leadText || !detectOrganicLead(leadText)) {
+        console.log(`[webhook] ${phone}: sin intención de lead — Mia no responde (silencio).`);
         return;
       }
       const pushName = data?.pushName ?? null;
