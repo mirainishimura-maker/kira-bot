@@ -11,6 +11,7 @@ import { startRecontactoCron, runRecontactoSweep } from './services/mia/recontac
 import { startRecordatoriosCron, runRecordatoriosSweep } from './services/mia/recordatorios.js';
 import { startResenasCron, runResenasSweep } from './services/mia/resenas.js';
 import { startResumenCron, runResumenDiario } from './services/mia/resumenDiario.js';
+import { runMetricas } from './services/mia/metricas.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 
 const app = express();
@@ -173,6 +174,22 @@ app.post('/admin/resumen', async (req, res) => {
     res.json(await runResumenDiario({ dry }));
   } catch (err) {
     console.error('[admin/resumen] falló:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Métricas del embudo (IG + leads + conversión). dry por defecto (muestra texto);
+// ?dry=false lo envía al WhatsApp de Mirai. Protegido por WEBHOOK_SECRET.
+app.post('/admin/metricas', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  const dry = !(req.query.dry === 'false' || req.query.dry === '0');
+  try {
+    res.json(await runMetricas({ dry }));
+  } catch (err) {
+    console.error('[admin/metricas] falló:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });

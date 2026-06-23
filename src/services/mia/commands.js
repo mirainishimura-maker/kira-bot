@@ -9,6 +9,7 @@
 //   /silenciar 51987654321                   (Mia deja de responderle — reversible)
 //   /activar 51987654321                     (Mia vuelve a responderle)
 //   /notocar 51987654321                     (NO TOCAR: Mia nunca le responde, ni como lead nuevo)
+//   /metricas                                (reporte del embudo: IG + leads + conversión)
 //   /reporte                                 (resumen de leads en la hoja + WhatsApp)
 
 import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
@@ -17,8 +18,9 @@ import { sendText } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 import { generateLeadReport } from './leadReport.js';
+import { runMetricas } from './metricas.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|reporte)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|metricas|reporte)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -50,6 +52,7 @@ export async function handleMiaCommand(text) {
     if (command === 'silenciar') return await cmdSilenciar(rest);
     if (command === 'activar')   return await cmdActivar(rest);
     if (command === 'notocar')   return await cmdNoTocar(rest);
+    if (command === 'metricas')  return await cmdMetricas();
     if (command === 'reporte')   return await cmdReporte();
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
@@ -204,6 +207,13 @@ async function cmdNoTocar(rest) {
   await addPatient({ phone, nombre: 'No tocar', etiqueta: 'no_tocar' });
   await setPatientEstado(phone, 'silenciada');
   return reply(`🚫 ${phone} agregado a NO TOCAR. Mia nunca le responderá, ni aunque escriba con palabras clave. Reversible: /activar ${phone}`);
+}
+
+// /metricas — reporte del embudo: Instagram (alcance) + WhatsApp (leads/guías) +
+// conversión a cita. Lo calcula y lo responde en el mismo chat.
+async function cmdMetricas() {
+  const r = await runMetricas({ dry: true });
+  return reply(r.texto || `⚠️ No pude calcular las métricas: ${r.error || 'error'}`);
 }
 
 async function cmdAddNote(rest) {
