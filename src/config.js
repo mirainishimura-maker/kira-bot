@@ -66,12 +66,20 @@ export const config = {
       .split(',')
       .map(s => s.trim())
       .filter(Boolean);
+    // Clínicas que REFIEREN leads (reenvían números de interesados). Cualquier
+    // mensaje de estos números con un teléfono adentro = referido: Mia registra
+    // al lead y le manda el saludo. Default Mont Sinai, sin depender de EasyPanel.
+    const referrerPhones = [
+      ...(process.env.MIA_REFERRER_PHONES || '').split(',').map(s => s.trim()).filter(Boolean),
+      '51941697769', // Clínica Mont Sinai
+    ];
     return {
       enabled: Boolean(url && key && aiKey && personal),
       supabase: { url, serviceRoleKey: key },
       openai:   { apiKey: aiKey, model: process.env.MIRAI_OPENAI_MODEL || 'gpt-4o-mini' },
       personalPhone: personal,
       operatorPhones,
+      referrerPhones,
       // Silencio inteligente: si Mirai retoma manual EN MEDIO de un flujo de
       // Mia (ya hubo mensaje de Mia previo), Mia se calla X minutos. La
       // apertura inicial (sin mensaje previo de Mia) NUNCA silencia, sin

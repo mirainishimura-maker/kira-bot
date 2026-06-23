@@ -195,3 +195,38 @@ export async function handleLeadIntake(text) {
     messages: [{ channel: 'private', text: fragmentoMsg }],
   };
 }
+
+// Intake de CLÍNICAS REFERIDORAS (ej: Mont Sinai). A diferencia del intake de
+// operadores, NO exige palabra clave: el referidor solo manda números de leads.
+// Extrae TODOS los teléfonos del mensaje, registra cada uno (etiqueta
+// lead_montsinai) y le manda el saludo. Devuelve un resumen para el referidor.
+export async function handleReferralNote(text, fromLabel = 'Clínica') {
+  if (!text || typeof text !== 'string') return null;
+  const phones = new Set();
+  PHONE_RE.lastIndex = 0;
+  let m;
+  while ((m = PHONE_RE.exec(text)) !== null) phones.add(`51${m[1]}${m[2]}${m[3]}`);
+  if (!phones.size) return null; // no hay número → no es un referido
+
+  const lineas = [];
+  for (const phone of phones) {
+    try {
+      const r = await addPatient({ phone, nombre: `Lead ${fromLabel}`, etiqueta: 'lead_montsinai' });
+      if (r.duplicated) { lineas.push(`• ${phone} — ya estaba`); continue; }
+      const patient = r.patient;
+      const jid = `${phone}@s.whatsapp.net`;
+      for (const burbuja of SALUDO_BURBUJAS) {
+        const sent = await sendText(jid, burbuja);
+        if (sent?.key?.id) rememberMiaSentId(sent.key.id);
+        await logMessage({
+          patientId: patient.id, author: 'mia', content: burbuja,
+          whatsappMessageId: sent?.key?.id ?? null, metadata: { kind: 'auto_intake_saludo' },
+        });
+      }
+      lineas.push(`• ${phone} — ✓ saludado`);
+    } catch (err) {
+      lineas.push(`• ${phone} — ⚠️ ${err.message}`);
+    }
+  }
+  return { messages: [{ channel: 'private', text: `📋 Referidos de ${fromLabel} — Mia ya les escribió:\n${lineas.join('\n')}` }] };
+}

@@ -20,7 +20,7 @@ import {
 } from '../services/mia/index.js';
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, analizarImagenParaMia } from '../services/mia/media.js';
-import { detectLeadNote, handleLeadIntake } from '../services/mia/leadIntake.js';
+import { detectLeadNote, handleLeadIntake, handleReferralNote } from '../services/mia/leadIntake.js';
 import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/organicLead.js';
 import { createLeadAuto } from '../services/mia/patients.js';
 import { nombreValido } from '../services/mia/text.js';
@@ -102,6 +102,21 @@ async function processMessage(data) {
     const senderPhone = phoneFromJid(remoteJid);
     const isMirai     = senderPhone === config.mia.personalPhone;
     const isOperator  = config.mia.operatorPhones.includes(senderPhone);
+    const isReferrer  = config.mia.referrerPhones.includes(senderPhone);
+
+    // Clínica REFERIDORA (ej: Mont Sinai 51941697769): cualquier mensaje con un
+    // número adentro → Mia registra al/los lead(s) y les manda el saludo. No
+    // requiere palabra clave (el referidor solo manda interesados).
+    if (isReferrer) {
+      try {
+        const result = await handleReferralNote(text, 'Mont Sinai');
+        if (result?.messages) await dispatchMessages(result.messages, { senderJid: remoteJid });
+        else console.log(`[webhook] referidor ${senderPhone}: mensaje sin número, ignoro.`);
+      } catch (err) {
+        console.error('[webhook] error en handleReferralNote:', err.message);
+      }
+      return;
+    }
 
     if (isMirai || isOperator) {
       // 1) Comando explícito (solo Mirai puede ejecutarlo)
@@ -211,8 +226,8 @@ async function processMessage(data) {
       // (saludo + guía si la pide + triage). Antes solo se notificaba a Mirai.
       // Guard: nunca auto-intakear a Mirai ni a operadores (si escribieron algo
       // que no es comando/nota, su mensaje lo ve Mirai en kiramkt — silencio).
-      if (phone === config.mia.personalPhone || config.mia.operatorPhones.includes(phone)) {
-        console.log(`[webhook] ${phone} = Mirai/operador (sin comando/nota) — silencio.`);
+      if (phone === config.mia.personalPhone || config.mia.operatorPhones.includes(phone) || config.mia.referrerPhones.includes(phone)) {
+        console.log(`[webhook] ${phone} = Mirai/operador/referidor — silencio.`);
         return;
       }
       const leadText = await multimodalToText(data);
