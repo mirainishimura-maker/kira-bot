@@ -125,11 +125,10 @@ export const config = {
         numero: (process.env.MIA_PAGO_NUMERO || '977668497').replace(/\D/g, ''),
         nombre: process.env.MIA_PAGO_NOMBRE || 'Mirai Nishimura',
       },
-      // Pedir reseña en Google tras la sesión. Apagado por defecto; necesita el
-      // link de reseña (MIA_RESENA_URL) para poder mandarlo.
+      // Pedir un TESTIMONIO anónimo tras la sesión (no usa link de Google).
+      // Encendido por defecto; se apaga solo con MIA_RESENA_ENABLED='false'.
       resenas: {
-        enabled: process.env.MIA_RESENA_ENABLED === 'true',
-        url: process.env.MIA_RESENA_URL || '',
+        enabled: process.env.MIA_RESENA_ENABLED !== 'false',
       },
       // Lead magnet (guía gratis en PDF) que Mia envía cuando un lead la pide.
       // URL pública por defecto (no secreta) → no depende de setear env en EasyPanel.

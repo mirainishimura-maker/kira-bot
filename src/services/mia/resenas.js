@@ -21,10 +21,10 @@ const MIN_HORAS_TRAS_SESION = 2;   // no pedir antes de 2h de terminada
 const HORA_INI = 8;
 const HORA_FIN = 21;
 
-// Mensajes (NEUTROS m/f). {nombre} y {link}.
+// Mensajes (NEUTROS m/f). Pide un TESTIMONIO anónimo (no usa link de Google). {nombre}.
 const MSG = [
-  'Hola {nombre} 🌸 espero que tu sesión con la Psicóloga Mirai te haya hecho bien 💛 Si te sentiste a gusto, ¿nos ayudarías con una reseñita en Google? Ayuda a que más personas encuentren este espacio 🌷\n{link}',
-  '{nombre}, gracias por darte este espacio 🌸 Si tu experiencia con la Psicóloga Mirai fue buena, una reseñita en Google nos ayudaría muchísimo 💛\n{link}',
+  'Hola {nombre} 🌸 espero que tu sesión con la Psicóloga Mirai te haya hecho bien 💛 Si te sentiste a gusto, ¿te animarías a contarnos en una o dos frasecitas cómo fue tu experiencia? La compartimos de forma anónima (sin tu nombre) para que más personas se animen a dar el paso 🌷',
+  '{nombre}, gracias por darte este espacio 🌸 ¿Nos dejarías unas palabritas de cómo te sentiste con tu sesión? Las usamos sin tu nombre, para animar a otros que lo necesitan 💛',
 ];
 
 function horaLima(now) {
@@ -52,8 +52,7 @@ async function yaPidioResena(patientId) {
 
 async function enviarResena(patient) {
   const jid = `${patient.phone}@s.whatsapp.net`;
-  const texto = aplicarNombre(pickVariante(MSG, patient.phone, 'resena'), patient.nombre)
-    .replaceAll('{link}', config.mia.resenas.url);
+  const texto = aplicarNombre(pickVariante(MSG, patient.phone, 'resena'), patient.nombre);
   const sent = await sendText(jid, texto);
   const sentId = sent?.key?.id ?? null;
   if (sentId) rememberMiaSentId(sentId);
@@ -92,8 +91,7 @@ export async function runResenasSweep({ dry = false } = {}) {
   }
 
   const enHora = enHorarioPermitido(now);
-  const tieneLink = Boolean(config.mia.resenas.url);
-  const enviar = !dry && config.mia.resenas.enabled && enHora && tieneLink;
+  const enviar = !dry && config.mia.resenas.enabled && enHora;
   const detalle = [];
   for (const { patient, appt } of aPedir) {
     if (enviar) {
@@ -112,7 +110,6 @@ export async function runResenasSweep({ dry = false } = {}) {
   let modo = 'DRY-RUN';
   if (!dry) {
     if (!config.mia.resenas.enabled) modo = 'DESACTIVADO (no envía)';
-    else if (!tieneLink) modo = 'SIN LINK (falta MIA_RESENA_URL)';
     else if (!enHora) modo = `FUERA DE HORARIO (${HORA_INI}-${HORA_FIN}h)`;
     else modo = 'ENVIANDO';
   }
@@ -121,7 +118,6 @@ export async function runResenasSweep({ dry = false } = {}) {
     ok: true,
     dry,
     enabled: config.mia.resenas.enabled,
-    tieneLink,
     enHorario: enHora,
     citasTerminadas: r.appointments.length,
     aPedir: aPedir.length,
