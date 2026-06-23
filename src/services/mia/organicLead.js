@@ -60,16 +60,13 @@ export async function notifyMiraiAboutOrganicLead({ phone, pushName, text }) {
   const truncatedMsg = String(text || '').slice(0, 200).replace(/\n+/g, ' ');
 
   const aviso = [
-    '📌 *Lead orgánico nuevo*',
+    '🆕 *Lead nuevo en NEURA* — Mia ya lo está atendiendo 🌸',
     '',
     `De: ${phone}` + (pushName ? ` (${pushName})` : ''),
-    `Mensaje: "${truncatedMsg}"`,
+    `Escribió: "${truncatedMsg}"`,
     '',
-    'Pega esto para que Mia lo salude y arranque el flujo:',
-    `/atender ${phone} ${cleanName}`,
-    '',
-    'O solo etiquetarlo sin saludo:',
-    `/paciente ${phone} ${cleanName} lead_organico`,
+    '👉 Si NO es un lead (contacto viejo/equivocado), silencialo:',
+    `/silenciar ${phone}`,
   ].join('\n');
 
   try {

@@ -230,6 +230,8 @@ async function processMessage(data) {
         return;
       }
       console.log(`[webhook] AUTO-INTAKE | nuevo lead "${pushName ?? ''}" (${phone}) → Mia`);
+      // Visibilidad: aviso en tiempo real a Mirai de que entró un lead nuevo (dedup 1h interno).
+      notifyMiraiAboutOrganicLead({ phone, pushName, text: leadText }).catch(() => {});
       enqueueMiaMessage({
         patient: lead,
         text: leadText,
