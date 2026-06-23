@@ -8,6 +8,7 @@
 //   /atender 51987654321 Nombre             (agrega lead_organico + envía saludo de bienvenida)
 //   /silenciar 51987654321                   (Mia deja de responderle — reversible)
 //   /activar 51987654321                     (Mia vuelve a responderle)
+//   /notocar 51987654321                     (NO TOCAR: Mia nunca le responde, ni como lead nuevo)
 //   /reporte                                 (resumen de leads en la hoja + WhatsApp)
 
 import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
@@ -17,7 +18,7 @@ import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 import { generateLeadReport } from './leadReport.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|reporte)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|reporte)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -48,6 +49,7 @@ export async function handleMiaCommand(text) {
     if (command === 'responder') return await cmdResponderEnNombreDeLead(rest);
     if (command === 'silenciar') return await cmdSilenciar(rest);
     if (command === 'activar')   return await cmdActivar(rest);
+    if (command === 'notocar')   return await cmdNoTocar(rest);
     if (command === 'reporte')   return await cmdReporte();
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
@@ -186,6 +188,22 @@ async function cmdActivar(rest) {
   const updated = await setPatientEstado(phone, 'datos_parciales');
   if (!updated) return reply(`No encontré paciente con ese número (${normalizePhone(phone)}).`);
   return reply(`🔊 Mia reactivada para ${updated.nombre} (${updated.phone}). Vuelve a responderle cuando escriba.`);
+}
+
+// Lista de NO TOCAR: bloquea un número para que Mia NUNCA lo enganche — ni como
+// paciente, ni como lead nuevo (aunque escriba con palabras clave). Sirve para
+// tus contactos personales/de trabajo. Reversible con /activar.
+async function cmdNoTocar(rest) {
+  const phone = normalizePhone(rest.trim().split(/\s+/)[0]);
+  if (!phone) return reply('Uso: /notocar <telefono>\nEjemplo: /notocar 51999138246');
+  const existing = await findPatientByPhone(phone);
+  if (existing) {
+    await setPatientEstado(phone, 'silenciada');
+    return reply(`🚫 ${existing.nombre} (${phone}) en NO TOCAR. Mia no le responde más. Reversible: /activar ${phone}`);
+  }
+  await addPatient({ phone, nombre: 'No tocar', etiqueta: 'no_tocar' });
+  await setPatientEstado(phone, 'silenciada');
+  return reply(`🚫 ${phone} agregado a NO TOCAR. Mia nunca le responderá, ni aunque escriba con palabras clave. Reversible: /activar ${phone}`);
 }
 
 async function cmdAddNote(rest) {

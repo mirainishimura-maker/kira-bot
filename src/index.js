@@ -10,6 +10,7 @@ import { ask } from './services/ai.js';
 import { startRecontactoCron, runRecontactoSweep } from './services/mia/recontacto.js';
 import { startRecordatoriosCron, runRecordatoriosSweep } from './services/mia/recordatorios.js';
 import { startResenasCron, runResenasSweep } from './services/mia/resenas.js';
+import { startResumenCron, runResumenDiario } from './services/mia/resumenDiario.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 
 const app = express();
@@ -160,6 +161,22 @@ app.post('/admin/neura', async (req, res) => {
   }
 });
 
+// Resumen diario de Mia a Mirai: dry por defecto (muestra el texto sin enviar).
+// ?dry=false lo envía YA al WhatsApp de Mirai. Protegido por WEBHOOK_SECRET.
+app.post('/admin/resumen', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  const dry = !(req.query.dry === 'false' || req.query.dry === '0');
+  try {
+    res.json(await runResumenDiario({ dry }));
+  } catch (err) {
+    console.error('[admin/resumen] falló:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(config.port, () => {
   const mode = config.miaOnly ? 'MIA-ONLY (sin KIRA-mkt)' : 'completo (KIRA-mkt + Mia)';
   console.log(`[kira] escuchando en :${config.port} (${config.env}, TZ=${config.tz}) | modo: ${mode}`);
@@ -174,6 +191,7 @@ app.listen(config.port, () => {
     startRecontactoCron();
     startRecordatoriosCron();
     startResenasCron();
+    startResumenCron();
   }
   // NEURA (publicador de Instagram) — independiente de Mia, se auto-gatea.
   startNeuraCron();
