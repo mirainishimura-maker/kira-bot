@@ -14,7 +14,7 @@ import { config } from '../../config.js';
 import { sendText, sendImage } from '../../lib/evolution.js';
 import { askMia } from './ai.js';
 import { logMessage, shouldMiaBeSilent } from './conversations.js';
-import { touchPatientInteraction, setPatientEstado } from './patients.js';
+import { touchPatientInteraction, setPatientEstado, findPatientByPhone } from './patients.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 
@@ -32,6 +32,17 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
     whatsappMessageId: messageId,
   });
   await touchPatientInteraction(patient.id, { authorCounted: 'patient' });
+
+  // 1b. Gate EXPLÍCITO re-chequeado al flush. El webhook ya filtra estado
+  // 'silenciada'/'alta' al recibir, PERO entre ese instante y este flush
+  // pasaron 30s–2min de debounce (ver inbox.js). Si Mirai mandó /silenciar
+  // o /quitar en esa ventana, el mensaje ya estaba en el buffer y se colaría.
+  // Releemos el estado fresco y respetamos el silencio.
+  const freshPatient = await findPatientByPhone(patient.phone);
+  if (freshPatient && (freshPatient.estado === 'silenciada' || freshPatient.estado === 'alta')) {
+    console.log(`[mia] ${patient.nombre} estado="${freshPatient.estado}" al flush — silencio, no respondo.`);
+    return;
+  }
 
   // 2. Modo silencio INTELIGENTE: solo silenciar si Mirai retomó manual
   // EN MEDIO de un flujo donde Mia ya respondió. La apertura inicial NO
@@ -150,8 +161,18 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
     // recontacto para NO molestar a quienes ya cerraron: cita_confirmada,
     // agendado, rechazado, etc. Si el lead agendó, deja de ser candidato.
     if (dl.estado) {
-      try { await setPatientEstado(patient.phone, dl.estado); }
-      catch (err) { console.warn('[mia] no pude actualizar patients.estado:', err.message); }
+      try {
+        // NO revivir un silencio. Si Mirai silenció/dio de alta al paciente
+        // mientras Mia generaba esta respuesta, NO pisamos ese estado terminal
+        // con el que dedujo la IA (si no, un solo turno colado des-silencia
+        // permanentemente y Mia vuelve a responder a todo).
+        const current = await findPatientByPhone(patient.phone);
+        if (current && (current.estado === 'silenciada' || current.estado === 'alta')) {
+          console.log(`[mia] no piso estado="${current.estado}" de ${patient.nombre} con "${dl.estado}" (Mirai lo silenció/dio de alta).`);
+        } else {
+          await setPatientEstado(patient.phone, dl.estado);
+        }
+      } catch (err) { console.warn('[mia] no pude actualizar patients.estado:', err.message); }
     }
   }
 
