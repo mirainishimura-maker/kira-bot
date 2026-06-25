@@ -2,9 +2,11 @@
 // calidez y sin ser pesada, a los leads que quedaron a mitad de camino.
 //
 // Cadencia (6 toques, gap desde el último mensaje):
-//   1 → 1h | 2 → +2h | 3 → +24h | 4 → +3d | 5 → +7d | 6 → +30d
-// Toques 1-3 (rápidos): mensaje de TEXTO personal (con el nombre).
+//   1 → 24h | 2 → +2d | 3 → +4d | 4 → +7d | 5 → +14d | 6 → +30d
+// Toques 1-3: mensaje de TEXTO personal (con el nombre).
 // Toques 4-6 (lentos): NOTIFICACIÓN-IMAGEN (la frase va dentro de la imagen).
+// Nota: el primer toque es al DÍA SIGUIENTE (no a la hora) — seguir a la hora
+// se siente a bot. Mejor espaciado y humano.
 //
 // SEGURIDAD: solo envía si config.mia.recontacto.enabled === true, y solo en la
 // ventana horaria permitida (8am–9pm Lima). El cron corre cada 30 min. El modo
@@ -30,11 +32,11 @@ const DIA = 24 * HORA;
 // Cadencia + tipo de cada toque. gap = cuánto esperar desde el último mensaje.
 // notif=true → notificación-imagen (la frase está en la imagen, va sin texto).
 const TOQUES = [
-  { gap: 1 * HORA,  notif: false }, // 1
-  { gap: 2 * HORA,  notif: false }, // 2
-  { gap: 24 * HORA, notif: false }, // 3
-  { gap: 3 * DIA,   notif: true  }, // 4
-  { gap: 7 * DIA,   notif: true  }, // 5
+  { gap: 24 * HORA, notif: false }, // 1 — al día siguiente
+  { gap: 2 * DIA,   notif: false }, // 2
+  { gap: 4 * DIA,   notif: false }, // 3
+  { gap: 7 * DIA,   notif: true  }, // 4
+  { gap: 14 * DIA,  notif: true  }, // 5
   { gap: 30 * DIA,  notif: true  }, // 6
 ];
 const GAPS = TOQUES.map(t => t.gap);
@@ -55,15 +57,15 @@ const ESTADOS_EXCLUIDOS = new Set([
 // Toques 1-3: texto personal (usan {nombre}). Toques 4-6: la frase que va
 // DENTRO de la notificación-imagen (sin emoji, sin {nombre} — la imagen es fija).
 const PLANTILLAS = [
-  // 1 (1h)
-  ['Hola {nombre} 🌸 ¿seguimos? quedé pendiente de tu respuesta 💛',
-   '{nombre}, ¿te quedó alguna duda? Aquí sigo para ayudarte ☺️'],
-  // 2 (+2h)
-  ['{nombre}, cualquier cosa que necesites para decidir, aquí estoy 🌸',
-   '¿Te ayudo con algo más para coordinar, {nombre}? 💛'],
-  // 3 (+24h)
-  ['Hola {nombre} 🌸 ¿retomamos cuando puedas? Aquí estoy 💛',
-   'Hola {nombre} ☺️ quedó algo pendiente y no quise dejarte sin seguimiento. ¿Seguimos cuando gustes? 🌸'],
+  // 1 (24h) — al día siguiente, cálido y con valor concreto
+  ['Hola {nombre} 🌸 te escribo para retomar cuando tengas un ratito. ¿Vemos un horario que te acomode?',
+   'Hola {nombre} ☺️ quedé pendiente de coordinarte el turno. ¿Te busco una opción para esta semana o la próxima?'],
+  // 2 (+2d)
+  ['{nombre}, sigo con un espacio para ti cuando quieras dar el paso 💛 ¿lo coordinamos?',
+   'Hola {nombre} 🌸 ¿te ayudo a encontrar un horario que te funcione? sin apuro, cuando sea tu momento'],
+  // 3 (+4d)
+  ['Hola {nombre} 🌸 a veces no es el momento, y está perfecto. Aquí sigo si quieres retomar 💛',
+   'Hola {nombre} ☺️ cuando quieras ver tu primera consulta, escríbeme y lo vemos con calma'],
   // 4 (+3d) — frase de la notificación-imagen
   ['Dar el primer paso no siempre es fácil, y está bien ir a tu ritmo'],
   // 5 (+7d)
