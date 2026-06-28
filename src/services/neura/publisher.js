@@ -122,9 +122,20 @@ async function publishReel(igId, token, videoUrl, caption) {
   return pub.id;
 }
 
+// Story (efímera 24h), imagen o video vertical 9:16. media_type=STORIES.
+async function publishStory(igId, token, { imageUrl, videoUrl }) {
+  const params = videoUrl
+    ? { media_type: 'STORIES', video_url: videoUrl }
+    : { media_type: 'STORIES', image_url: imageUrl };
+  const cont = await igPost(`${igId}/media`, params, token);
+  await esperarListo(igId, cont.id, token, videoUrl ? 40 : 10);
+  const pub = await igPost(`${igId}/media_publish`, { creation_id: cont.id }, token);
+  return pub.id;
+}
+
 // ─── Barrido: publica el PRÓXIMO pendiente de la cola ─────────────────
 // dry=true → solo dice qué publicaría, sin publicar.
-export async function runNeuraSweep({ dry = false } = {}) {
+export async function runNeuraSweep({ dry = false, prefer = null } = {}) {
   if (!config.neura.enabled) return { ok: false, error: 'NEURA desactivado' };
   if (!config.neura.igUserId) return { ok: false, error: 'falta NEURA_IG_USER_ID' };
 
@@ -134,14 +145,20 @@ export async function runNeuraSweep({ dry = false } = {}) {
   if (!dry) state = await refreshTokenSiHaceFalta(state, now);
 
   const pendientes = state.queue.filter(p => !p.posted);
-  const item = pendientes[0];
+  // prefer = prioridad de tipo para ESTE horario (ej. ['carousel','single','reel']).
+  // Toma el 1er pendiente del tipo de mayor prioridad disponible; si ninguno, FIFO.
+  let item = null;
+  if (prefer && prefer.length) {
+    for (const t of prefer) { item = pendientes.find(p => p.tipo === t); if (item) break; }
+  }
+  if (!item) item = pendientes[0];
   if (!item) {
     console.log('[neura] cola vacía — nada para publicar.');
     return { ok: true, dry, publicado: null, pendientes: 0, mensaje: 'cola vacía' };
   }
 
   if (dry) {
-    return { ok: true, dry: true, proximo: { id: item.id, tipo: item.tipo, caption: (item.caption || '').slice(0, 80) }, pendientes: pendientes.length };
+    return { ok: true, dry: true, prefer, proximo: { id: item.id, tipo: item.tipo, caption: (item.caption || '').slice(0, 80) }, pendientes: pendientes.length };
   }
 
   try {
@@ -161,10 +178,43 @@ export async function runNeuraSweep({ dry = false } = {}) {
     item.posted_at = new Date(now).toISOString();
     await saveState(state);
     console.log(`[neura] publicado "${item.id}" (${item.tipo}) → media ${mediaId} | quedan ${pendientes.length - 1}`);
+
+    // Re-compartir la publicación recién hecha a una story (boost de alcance).
+    if (config.neura.reshareStory) {
+      try {
+        const story = item.tipo === 'reel' ? { videoUrl: item.video || imgs[0] } : { imageUrl: imgs[0] };
+        const sid = await publishStory(igId, state.token, story);
+        console.log(`[neura] re-compartido a story → ${sid}`);
+      } catch (e) { console.warn('[neura] reshare a story falló:', e.message); }
+    }
     return { ok: true, publicado: { id: item.id, mediaId }, pendientes: pendientes.length - 1 };
   } catch (err) {
     console.error(`[neura] error publicando "${item.id}":`, err.message);
     return { ok: false, error: err.message, item: item.id };
+  }
+}
+
+// ─── Story "frase del día": publica la próxima de la cola state.stories ──
+export async function runNeuraStory({ dry = false } = {}) {
+  if (!config.neura.enabled) return { ok: false, error: 'NEURA desactivado' };
+  if (!config.neura.igUserId) return { ok: false, error: 'falta NEURA_IG_USER_ID' };
+  const now = Date.now();
+  let state = await loadState();
+  if (!state.token) return { ok: false, error: 'falta token' };
+  if (!Array.isArray(state.stories)) state.stories = [];
+  const item = state.stories.find(s => !s.posted);
+  if (!item) { console.log('[neura] sin stories en cola.'); return { ok: true, mensaje: 'sin stories' }; }
+  if (dry) return { ok: true, dry: true, proximo: item.id, pendientes: state.stories.filter(s => !s.posted).length };
+  state = await refreshTokenSiHaceFalta(state, now);
+  try {
+    const sid = await publishStory(config.neura.igUserId, state.token, { imageUrl: item.image });
+    item.posted = true; item.ig_media_id = sid; item.posted_at = new Date(now).toISOString();
+    await saveState(state);
+    console.log(`[neura] story publicada "${item.id}" → ${sid}`);
+    return { ok: true, publicado: sid };
+  } catch (err) {
+    console.error('[neura] story falló:', err.message);
+    return { ok: false, error: err.message };
   }
 }
 
@@ -176,14 +226,33 @@ export function startNeuraCron() {
   }
   const tz = 'America/Lima';
   const horas = config.neura.horas.length ? config.neura.horas : [9, 14, 20];
-  const job = async () => {
-    try { await runNeuraSweep({ dry: false }); }
-    catch (err) { console.error('[neura] sweep falló:', err); }
-  };
-  cron.schedule(`0 ${horas.join(',')} * * *`, job, { timezone: tz });
-  console.log(`[neura] cron activo | publica a las ${horas.join(', ')}h (${tz})`);
+  // Cada día = 1 de cada tipo, uno por horario. prefer = prioridad por slot, con
+  // respaldo si ese tipo se agotó (ej. sin carruseles → cae a single).
+  const PREFER = [
+    ['single',  'carousel', 'reel'],     // slot 1 (mañana) → post
+    ['carousel','single',   'reel'],     // slot 2 (tarde)  → carrusel
+    ['reel',    'carousel', 'single'],   // slot 3 (noche)  → reel (prime time)
+  ];
+  horas.forEach((h, i) => {
+    const prefer = PREFER[i] || null;
+    cron.schedule(`0 ${h} * * *`, async () => {
+      try { await runNeuraSweep({ dry: false, prefer }); }
+      catch (err) { console.error('[neura] sweep falló:', err); }
+    }, { timezone: tz });
+  });
+  console.log(`[neura] cron diario | ${horas.map((h, i) => `${h}h:${PREFER[i] ? PREFER[i][0] : 'auto'}`).join(' · ')} (${tz})`);
+
+  // Story "frase del día" (cola state.stories) en su propio horario. 0 = off.
+  const sh = config.neura.storyHora;
+  if (Number.isInteger(sh) && sh >= 1 && sh <= 23) {
+    cron.schedule(`0 ${sh} * * *`, async () => {
+      try { await runNeuraStory({ dry: false }); }
+      catch (err) { console.error('[neura] story cron falló:', err); }
+    }, { timezone: tz });
+    console.log(`[neura] story "frase del día" a las ${sh}h (${tz})`);
+  }
 }
 
 // Helpers exportados para el setup (subir imágenes + sembrar la cola) y para
 // publicar contenido puntual desde un script (reel, single o carrusel).
-export { loadState, saveState, publishReel, publishSingle, publishCarousel };
+export { loadState, saveState, publishReel, publishSingle, publishCarousel, publishStory };

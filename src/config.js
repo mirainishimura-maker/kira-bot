@@ -164,5 +164,9 @@ export const config = {
     // Horas (Lima) en que publica. Default 3/día. Coma-separadas.
     horas: (process.env.NEURA_HORAS || '9,14,20')
       .split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n >= 0 && n < 24),
+    // Stories: re-compartir cada publicación del feed a una story (default ON).
+    reshareStory: process.env.NEURA_RESHARE_STORY !== 'false',
+    // Hora (Lima) de la story "frase del día" (cola state.stories). 0 = desactivar.
+    storyHora: Number(process.env.NEURA_STORY_HORA || 11),
   },
 };
