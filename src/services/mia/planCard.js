@@ -5,10 +5,12 @@
 // Fuentes embebidas en assets/fonts (instancias estáticas Regular/Bold/Italic),
 // para que renderice igual en el server (sin fuentes de sistema).
 
-import { Resvg } from '@resvg/resvg-js';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
+
+// resvg es un módulo NATIVO: lo cargamos de forma diferida para que, si fallara
+// en el server, solo se rompa /paquete y no el arranque de todo el bot.
 
 const FONT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../assets/fonts');
 const FONT_FILES = [
@@ -115,8 +117,9 @@ export function buildCardSVG(o) {
 </svg>`;
 }
 
-// Renderiza el SVG a PNG (Buffer) con las fuentes embebidas.
-export function renderCardPng(svg) {
+// Renderiza el SVG a PNG (Buffer) con las fuentes embebidas. Carga resvg al vuelo.
+export async function renderCardPng(svg) {
+  const { Resvg } = await import('@resvg/resvg-js');
   const r = new Resvg(svg, {
     fitTo: { mode: 'width', value: 1080 },
     font: { loadSystemFonts: false, fontFiles: FONT_FILES, defaultFontFamily: 'Montserrat' },
@@ -131,7 +134,7 @@ export async function generarYSubirPlan({ phone, nombre, nSesiones, objetivo, pr
   try {
     const { titulo1, titulo2 } = splitObjetivo(objetivo);
     const svg = buildCardSVG({ nombre, titulo1, titulo2, nSesiones, precioPaquete, precioSuelta });
-    const png = renderCardPng(svg);
+    const png = await renderCardPng(svg);
     const key = `mia/planes/${String(phone)}_${nSesiones}s_${Date.now()}.png`;
     const { error } = await miraiSupabase.storage.from(BUCKET).upload(key, png, { contentType: 'image/png', upsert: true });
     if (error) return { ok: false, error: 'upload: ' + error.message };
