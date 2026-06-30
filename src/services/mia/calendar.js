@@ -197,6 +197,44 @@ export async function listUpcomingAppointments({ hoursAhead } = {}) {
   return { ok: true, appointments };
 }
 
+// ─── Bloqueos: Mirai se marca NO DISPONIBLE en un rango (viaje, etc.) ──
+// Crea un evento CON HORA que tapa [startISO, endISO); así Mia deja de ofrecer
+// esos turnos. → { ok, inicio_iso, fin_iso, motivo, inicio_label, fin_label }
+export async function blockRange({ startISO, endISO, motivo }) {
+  const r = await callCal('blockTime', { startISO, endISO, motivo });
+  if (!r.ok) return { ok: false, error: r.error };
+  return {
+    ok: true,
+    inicio_iso: r.data.startISO,
+    fin_iso: r.data.endISO,
+    motivo: r.data.motivo,
+    inicio_label: slotLabel(r.data.startISO),
+    fin_label: slotLabel(r.data.endISO),
+  };
+}
+
+// Lista los bloqueos futuros. → { ok, blocks: [{ eventId, inicio_iso, fin_iso, motivo, inicio_label, fin_label }] }
+export async function listBlocks() {
+  const r = await callCal('listBlocks', {});
+  if (!r.ok) return { ok: false, error: r.error, blocks: [] };
+  const blocks = (r.data?.blocks ?? []).map(b => ({
+    eventId: b.eventId,
+    inicio_iso: b.startISO,
+    fin_iso: b.endISO,
+    motivo: b.motivo,
+    inicio_label: slotLabel(b.startISO),
+    fin_label: slotLabel(b.endISO),
+  }));
+  return { ok: true, blocks };
+}
+
+// Quita bloqueos que se solapen con [startISO, endISO). → { ok, deleted }
+export async function unblockRange({ startISO, endISO }) {
+  const r = await callCal('unblockTime', { startISO, endISO });
+  if (!r.ok) return { ok: false, error: r.error };
+  return { ok: true, deleted: r.data?.deleted ?? 0 };
+}
+
 // Lista las citas CONFIRMADAS que YA TERMINARON (últimas `hoursBack` horas) —
 // para pedir reseña. → { ok, appointments: [{ inicio_iso, fin_iso, phone, etiqueta }] }
 export async function listFinishedAppointments({ hoursBack } = {}) {

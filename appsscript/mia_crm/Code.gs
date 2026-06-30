@@ -101,6 +101,9 @@ function doPost(e) {
       case 'listFinished':       return ok(listFinished(body.data || {}));
       case 'rescheduleAppointment': return ok(rescheduleAppointment(body.data || {}));
       case 'cancelAppointment':     return ok(cancelAppointment(body.data || {}));
+      case 'blockTime':          return ok(blockTime(body.data || {}));
+      case 'listBlocks':         return ok(listBlocks(body.data || {}));
+      case 'unblockTime':        return ok(unblockTime(body.data || {}));
       case 'expireHolds':        return ok(expireHolds());
       default:            return err('unknown action: ' + body.action);
     }
@@ -313,6 +316,7 @@ const APPT_DURATION_MIN = 45;            // primera consulta: bloque de 45 min
 const HOLD_TTL_HORAS = 24;               // hold sin pago deja de bloquear a las 24h
 const HOLD_PREFIX    = '⏳ HOLD — ';
 const OK_PREFIX      = '✅ ';
+const BLOCK_PREFIX   = '🚫 BLOQUEO — ';     // bloqueos manuales de Mirai (viajes, etc.)
 const CAL_PROP_KEY   = 'MIA_CALENDAR_ID';
 
 // Plantilla semanal de turnos posibles. Clave = día (ISO: 1=Lun … 7=Dom),
@@ -659,6 +663,75 @@ function expireHolds() {
   let deleted = 0;
   for (let i = 0; i < events.length; i++) {
     if (isExpiredHold(events[i])) { events[i].deleteEvent(); deleted++; }
+  }
+  return { deleted: deleted };
+}
+
+// =====================================================================
+// BLOQUEOS — Mirai se marca NO DISPONIBLE en un rango (viaje, etc.)
+// =====================================================================
+// Crea UN evento CON HORA (no de día completo) que cubre [startISO, endISO).
+// Importante: isFree() ignora los eventos de día completo, así que un bloqueo
+// DEBE tener hora para que Mia deje de ofrecer esos turnos. Lo marcamos con
+// BLOCK_PREFIX para poder listarlo/quitarlo sin tocar citas ni eventos personales.
+function blockTime(data) {
+  const cal = getCal();
+  if (!data.startISO || !data.endISO) throw new Error('startISO y endISO requeridos');
+  const start = new Date(data.startISO);
+  const end   = new Date(data.endISO);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return { ok: false, error: 'fechas inválidas' };
+  if (end.getTime() <= start.getTime())               return { ok: false, error: 'el fin debe ser posterior al inicio' };
+
+  const motivo = data.motivo ? String(data.motivo) : 'No disponible';
+  const ev = cal.createEvent(BLOCK_PREFIX + motivo, start, end, {
+    description: 'via: Mia\ntipo: bloqueo\nmotivo: ' + motivo,
+  });
+  try { ev.setColor(CalendarApp.EventColor.GRAY); } catch (e) { /* no crítico */ }
+
+  return { ok: true, eventId: ev.getId(), startISO: toLimaISO(start), endISO: toLimaISO(end), motivo: motivo };
+}
+
+// Lista los bloqueos futuros creados por Mia (los marcados con BLOCK_PREFIX).
+function listBlocks(data) {
+  const cal = getCal();
+  const now = new Date();
+  const horizon = new Date(now.getTime() + 180 * 86400000);
+  const events = cal.getEvents(now, horizon);
+  const out = [];
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (ev.getTitle().indexOf(BLOCK_PREFIX) !== 0) continue;
+    out.push({
+      eventId:  ev.getId(),
+      startISO: toLimaISO(ev.getStartTime()),
+      endISO:   toLimaISO(ev.getEndTime()),
+      motivo:   ev.getTitle().replace(BLOCK_PREFIX, ''),
+    });
+  }
+  return { blocks: out, count: out.length };
+}
+
+// Quita bloqueos: por eventId, o todos los BLOCK_PREFIX que se solapen con
+// [startISO, endISO). Nunca borra citas ni eventos personales (solo BLOCK_PREFIX).
+function unblockTime(data) {
+  const cal = getCal();
+  let deleted = 0;
+
+  if (data.eventId) {
+    const ev = cal.getEventById(data.eventId);
+    if (ev && ev.getTitle().indexOf(BLOCK_PREFIX) === 0) { ev.deleteEvent(); deleted++; }
+    return { deleted: deleted };
+  }
+
+  if (!data.startISO || !data.endISO) throw new Error('eventId, o startISO+endISO, requeridos');
+  const start = new Date(data.startISO);
+  const end   = new Date(data.endISO);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return { ok: false, error: 'fechas inválidas' };
+
+  const events = cal.getEvents(start, end);
+  for (let i = 0; i < events.length; i++) {
+    const ev = events[i];
+    if (ev.getTitle().indexOf(BLOCK_PREFIX) === 0) { ev.deleteEvent(); deleted++; }
   }
   return { deleted: deleted };
 }
