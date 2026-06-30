@@ -334,13 +334,28 @@ async function cmdResponderEnNombreDeLead(rest) {
 // ofrecer esos turnos. Parser tolerante: acepta d/m, d-m, d/m/aaaa, aaaa-mm-dd;
 // hora HH:mm o palabra (mañana=8, mediodía=12, tarde=13, noche=18); conectores
 // "a"/"al"/"hasta"; ignora relleno "del/desde/de/el…". Sin hora: día completo.
-const FILLER_WORDS  = new Set(['del', 'desde', 'de', 'el', 'la', 'los', 'las', 'dia', 'día', 'en', 'y']);
+const FILLER_WORDS  = new Set(['del', 'desde', 'de', 'el', 'la', 'los', 'las', 'dia', 'día', 'en', 'y', 'este', 'esta']);
 const CONNECT_WORDS = new Set(['a', 'al', 'hasta', '-', '—']);
 const TIME_WORDS = { 'manana': '08:00', 'mañana': '08:00', 'mediodia': '12:00', 'mediodía': '12:00', 'tarde': '13:00', 'noche': '18:00' };
 const MESES = {
   enero: 1, febrero: 2, marzo: 3, abril: 4, mayo: 5, junio: 6, julio: 7,
   agosto: 8, septiembre: 9, setiembre: 9, octubre: 10, noviembre: 11, diciembre: 12,
 };
+const DOW = { 'domingo': 0, 'lunes': 1, 'martes': 2, 'miercoles': 3, 'miércoles': 3, 'jueves': 4, 'viernes': 5, 'sabado': 6, 'sábado': 6 };
+const pad2 = (n) => String(n).padStart(2, '0');
+
+// Fecha Y/M/D de Lima a `offsetDays` de hoy (hoy=0, mañana=1, …).
+function limaYMD(offsetDays) {
+  const base = new Date(Date.now() + (offsetDays || 0) * 86400000);
+  const s = base.toLocaleDateString('en-CA', { timeZone: 'America/Lima' }); // "YYYY-MM-DD"
+  const [y, mo, d] = s.split('-').map(Number);
+  return { y, mo, d, hadYear: true };
+}
+function dowOfYMD(f) { return new Date(`${f.y}-${pad2(f.mo)}-${pad2(f.d)}T12:00:00-05:00`).getUTCDay(); }
+function nextWeekday(target) {                       // próxima ocurrencia (hoy cuenta)
+  const hoy = limaYMD(0);
+  return limaYMD((target - dowOfYMD(hoy) + 7) % 7);
+}
 
 // Parsea un token numérico de fecha: d/m, d-m, d/m/aaaa, aaaa-mm-dd.
 function parseFechaTok(tok) {
@@ -356,11 +371,26 @@ function parseFechaTok(tok) {
   return null;
 }
 
-// Consume una fecha desde toks[i] — sea un token numérico (7/7) o "7 [de] julio
-// [de aaaa]". Devuelve { f, i } con el índice siguiente, o null.
+// Consume una fecha desde toks[i]: "hoy"/"mañana", día de semana (próximo),
+// token numérico (7/7), o "7 [de] julio [de aaaa]". Devuelve { f, i } o null.
 function consumeFecha(toks, i) {
   while (i < toks.length && FILLER_WORDS.has(toks[i].toLowerCase())) i++;
   if (i >= toks.length) return null;
+  const w = toks[i].toLowerCase();
+
+  // Relativos: hoy / mañana / pasado [mañana].
+  let rel = null;
+  if (w === 'hoy') rel = 0;
+  else if (w === 'mañana' || w === 'manana') rel = 1;
+  else if (w === 'pasado') rel = 2;
+  if (rel !== null) {
+    let k = i + 1;
+    if (rel === 2 && k < toks.length && (toks[k].toLowerCase() === 'mañana' || toks[k].toLowerCase() === 'manana')) k++;
+    if (k < toks.length && DOW.hasOwnProperty(toks[k].toLowerCase())) k++; // "mañana miércoles" → ignora confirmación
+    return { f: limaYMD(rel), i: k };
+  }
+
+  if (DOW.hasOwnProperty(w)) return { f: nextWeekday(DOW[w]), i: i + 1 };
 
   const single = parseFechaTok(toks[i]);
   if (single) return { f: single, i: i + 1 };
@@ -380,73 +410,108 @@ function consumeFecha(toks, i) {
   return null;
 }
 
-// Consume una hora opcional desde toks[i] (saltando relleno): HH:mm, 5pm, o
-// palabra (mañana/mediodía/tarde/noche). Devuelve { hora, i } (i sin cambios si no hay).
+// Consume una hora opcional desde toks[i] (saltando relleno y "a las"): HH:mm,
+// 5pm, "5 pm", o palabra (mañana/mediodía/tarde/noche). Devuelve metadata para
+// poder propagar el meridiano del fin al inicio ("de 5 a 6pm" → 5pm).
 function consumeHora(toks, i) {
-  let j = i;
-  while (j < toks.length && FILLER_WORDS.has(toks[j].toLowerCase())) j++;
+  let j = i, skippedConnector = false;
+  while (j < toks.length) {
+    const w = toks[j].toLowerCase();
+    if (FILLER_WORDS.has(w)) { j++; continue; }
+    if (w === 'a' || w === 'al') { skippedConnector = true; j++; continue; }
+    break;
+  }
   const tok = (toks[j] || '').toLowerCase();
-  if (TIME_WORDS[tok]) return { hora: TIME_WORDS[tok], i: j + 1 };
+  if (TIME_WORDS[tok]) return { hora: TIME_WORDS[tok], i: j + 1, isNumeric: false, hadMer: true, mer: null };
   const m = tok.match(/^(\d{1,2})(?::(\d{2}))?(am|pm)?$/);
   if (m) {
-    let h = +m[1];
-    const min = m[2] || '00';
-    if (m[3] === 'pm' && h < 12) h += 12;
-    if (m[3] === 'am' && h === 12) h = 0;
-    if (h <= 23 && +min <= 59) return { hora: `${String(h).padStart(2, '0')}:${min}`, i: j + 1 };
+    const h = +m[1], min = m[2] || '00';
+    let mer = m[3], nextI = j + 1;
+    if (!mer) { const nx = (toks[j + 1] || '').toLowerCase().replace(/\./g, ''); if (nx === 'am' || nx === 'pm') { mer = nx; nextI = j + 2; } }
+    const bare = !m[2] && !mer;
+    if (bare && skippedConnector) return { hora: null, i }; // no comerse un día tras "a/al"
+    let hh = h;
+    if (mer === 'pm' && hh < 12) hh += 12;
+    if (mer === 'am' && hh === 12) hh = 0;
+    if (hh <= 23 && +min <= 59) return { hora: `${pad2(hh)}:${min}`, i: nextI, isNumeric: true, hadMer: Boolean(mer), mer: mer || null, rawHour: h, min };
   }
   return { hora: null, i };
 }
 
+// "de 5 a 6pm" → si el inicio va pelado (sin am/pm) y el fin trae meridiano, se
+// lo aplica al inicio (5pm, no 5am). Devuelve la hora de inicio ya resuelta.
+function aplicarMeridianoFin(iniHora, h1, h2) {
+  if (!h1 || !h1.isNumeric || h1.hadMer || h1.rawHour > 12) return iniHora;
+  if (!h2 || !h2.isNumeric || !h2.mer) return iniHora;
+  let h = h1.rawHour;
+  if (h2.mer === 'pm' && h < 12) h += 12;
+  if (h2.mer === 'am' && h === 12) h = 0;
+  return `${pad2(h)}:${h1.min}`;
+}
+
 function isoLima(f, hhmm) {
-  const p = (n) => String(n).padStart(2, '0');
-  return `${f.y}-${p(f.mo)}-${p(f.d)}T${hhmm}:00-05:00`;
+  return `${f.y}-${pad2(f.mo)}-${pad2(f.d)}T${hhmm}:00-05:00`;
 }
 
 // Convierte el texto del comando en { startISO, endISO, motivo } o { error }.
+// Soporta rango multi-día ("7/7 a 12/7"), mismo día con horas ("mañana de 5pm a
+// 6pm") y una sola hora ("hoy a las 5pm" → de esa hora al fin del día).
 function parseRangoBloqueo(rest) {
   const toks = (rest || '').trim().split(/\s+/).filter(Boolean);
 
   const a = consumeFecha(toks, 0);
-  if (!a) return { error: 'No entiendo la fecha de inicio. Usa d/m (7/7) o "7 de julio".' };
+  if (!a) return { error: 'No entiendo el inicio. Usa "hoy", "mañana", d/m (8/7) o "7 de julio".' };
   const ini = a.f;
-  let h1 = consumeHora(toks, a.i);
+  const h1 = consumeHora(toks, a.i);
   let i = h1.i;
-  const iniHora = h1.hora || '00:00';
+  let iniHora = h1.hora || '00:00';
 
   while (i < toks.length && (FILLER_WORDS.has(toks[i].toLowerCase()) || CONNECT_WORDS.has(toks[i].toLowerCase()))) i++;
 
+  let fin, finHora, sameDay = false, h2 = null;
   const b = consumeFecha(toks, i);
-  if (!b) return { error: 'No entiendo la fecha de fin. Usa d/m (12/7) o "12 de julio".' };
-  const fin = b.f;
-  let h2 = consumeHora(toks, b.i);
-  i = h2.i;
-  const finHora = h2.hora || '23:59';
+  if (b) {
+    fin = b.f;
+    h2 = consumeHora(toks, b.i);
+    finHora = h2.hora || '23:59';
+    i = h2.i;
+  } else {
+    h2 = consumeHora(toks, i);
+    if (h2.hora) { sameDay = true; finHora = h2.hora; i = h2.i; }       // "de 5pm a 6pm"
+    else if (h1.hora) { sameDay = true; finHora = '23:59'; }            // "a las 5pm" → fin del día
+    else return { error: 'No entiendo el fin. Di "de 5pm a 6pm" o una fecha (ej: 12/7).' };
+  }
 
-  const motivo = toks.slice(i).join(' ').trim();
+  iniHora = aplicarMeridianoFin(iniHora, h1, h2);
 
   // Año: si no se escribió, usa el actual; si el inicio ya pasó, salta al próximo.
   const now = new Date();
   const year = now.getFullYear();
   if (!ini.y) ini.y = year;
-  if (!fin.y) fin.y = year;
+  if (sameDay) fin = { y: ini.y, mo: ini.mo, d: ini.d, hadYear: ini.hadYear };
+  else if (!fin.y) fin.y = year;
+
   let startISO = isoLima(ini, iniHora);
   let endISO   = isoLima(fin, finHora);
   if (!ini.hadYear && new Date(startISO).getTime() < now.getTime()) {
-    ini.y++; fin.y++;
+    ini.y++; if (sameDay) fin.y = ini.y; else fin.y++;
     startISO = isoLima(ini, iniHora);
     endISO   = isoLima(fin, finHora);
   }
   if (new Date(endISO).getTime() <= new Date(startISO).getTime()) {
-    return { error: 'El fin debe ser posterior al inicio. Revisa las fechas.' };
+    return { error: 'El fin debe ser posterior al inicio. Revisa las horas/fechas.' };
   }
-  return { startISO, endISO, motivo };
+  return { startISO, endISO, motivo: toks.slice(i).join(' ').trim() };
 }
 
 const USO_BLOQUEAR =
-  'Uso: /bloquear <inicio> a <fin> [motivo]\n' +
-  'Ej: /bloquear 7/7 tarde a 12/7 trabajo misionero\n' +
-  'Sin hora = día completo. Palabras de hora: mañana=8am, mediodía=12, tarde=1pm, noche=6pm.';
+  'Uso: /bloquear <cuándo> [motivo]\n' +
+  'Ejemplos:\n' +
+  '• /bloquear mañana de 5pm a 6pm dentista\n' +
+  '• /bloquear hoy a las 5pm  (de esa hora al fin del día)\n' +
+  '• /bloquear viernes de 3 a 4pm\n' +
+  '• /bloquear 7/7 tarde a 12/7 trabajo misionero  (varios días)\n' +
+  'Entiende hoy/mañana, días de semana, "7 de julio", y horas tipo 5pm o 17:00.';
 
 async function cmdBloquear(rest) {
   if (!rest.trim()) return reply(USO_BLOQUEAR);
