@@ -164,6 +164,10 @@ export const config = {
     // Horas (Lima) en que publica. Default 3/día. Coma-separadas.
     horas: (process.env.NEURA_HORAS || '9,14,20')
       .split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n >= 0 && n < 24),
+    // Portada del reel: ms del frame que IG usa como portada. Los reels arrancan
+    // con un fade-in desde negro (~0.5s), así que el frame 0 es negro feo. 2500ms
+    // cae en zona ya visible. Si un item trae `cover` (URL de imagen), esa gana.
+    reelThumbMs: Number(process.env.NEURA_REEL_THUMB_MS || 2500),
     // Stories: re-compartir cada publicación del feed a una story (default ON).
     reshareStory: process.env.NEURA_RESHARE_STORY !== 'false',
     // Hora (Lima) de la story "frase del día" (cola state.stories). 0 = desactivar.

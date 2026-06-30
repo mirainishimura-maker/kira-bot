@@ -114,8 +114,16 @@ async function publishCarousel(igId, token, imageUrls, caption) {
 // Reel (video vertical 9:16). El contenedor tarda más en procesar (video),
 // por eso esperamos más intentos a que quede FINISHED antes de publicar.
 // share_to_feed=true → también aparece en el feed, no solo en la pestaña Reels.
-async function publishReel(igId, token, videoUrl, caption) {
-  const cont = await igPost(`${igId}/media`, { media_type: 'REELS', video_url: videoUrl, caption, share_to_feed: 'true' }, token);
+//
+// Portada: sin esto IG usa el frame 0, que en nuestros reels es el fade-in negro.
+//   · coverUrl (imagen) → portada diseñada; gana si existe.
+//   · si no, thumb_offset = un frame ya visible (default config.neura.reelThumbMs)
+//     para evitar el negro. Aplica a TODO reel (cola, futuros y scripts a mano).
+async function publishReel(igId, token, videoUrl, caption, { coverUrl = null, thumbOffset = config.neura.reelThumbMs } = {}) {
+  const params = { media_type: 'REELS', video_url: videoUrl, caption, share_to_feed: 'true' };
+  if (coverUrl) params.cover_url = coverUrl;
+  else if (Number.isInteger(thumbOffset) && thumbOffset > 0) params.thumb_offset = String(thumbOffset);
+  const cont = await igPost(`${igId}/media`, params, token);
   const listo = await esperarListo(igId, cont.id, token, 40); // hasta ~2 min
   if (!listo) console.warn('[neura] reel quizá no terminó de procesar; intento publicar igual…');
   const pub = await igPost(`${igId}/media_publish`, { creation_id: cont.id }, token);
@@ -166,7 +174,7 @@ export async function runNeuraSweep({ dry = false, prefer = null } = {}) {
     const imgs = item.images || [];
     let mediaId;
     if (item.tipo === 'reel') {
-      mediaId = await publishReel(igId, state.token, item.video || imgs[0], item.caption || '');
+      mediaId = await publishReel(igId, state.token, item.video || imgs[0], item.caption || '', { coverUrl: item.cover || null });
     } else if (item.tipo === 'carousel' || imgs.length > 1) {
       mediaId = await publishCarousel(igId, state.token, imgs, item.caption || '');
     } else {
