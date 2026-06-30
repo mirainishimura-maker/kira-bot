@@ -14,17 +14,23 @@
 //   /bloquear 7/7 tarde a 12/7 trabajo misionero   (Mia no ofrece esos turnos)
 //   /desbloquear 7/7 a 12/7                  (quita el bloqueo de ese rango)
 //   /bloqueos                                (lista los bloqueos activos)
+//   /paquete 51999 Fran 6 Procesar la ansiedad  (arma tarjeta + preview; envía con /confirmar)
+//   /agendar 51999 Fran                      (mensaje para coordinar cita; envía con /confirmar)
+//   /confirmar                               (envía el último /paquete o /agendar pendiente)
+//   /cancelar                                (descarta el envío pendiente)
 
 import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
 import { logMessage } from './conversations.js';
-import { sendText } from '../../lib/evolution.js';
+import { sendText, sendImage } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 import { generateLeadReport } from './leadReport.js';
 import { runMetricas } from './metricas.js';
 import { blockRange, listBlocks, unblockRange } from './calendar.js';
+import { generarYSubirPlan } from './planCard.js';
+import { config } from '../../config.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|metricas|reporte|bloquear|desbloquear|bloqueos)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -61,6 +67,10 @@ export async function handleMiaCommand(text) {
     if (command === 'bloquear')    return await cmdBloquear(rest);
     if (command === 'desbloquear') return await cmdDesbloquear(rest);
     if (command === 'bloqueos')    return await cmdBloqueos();
+    if (command === 'paquete')     return await cmdPaquete(rest);
+    if (command === 'agendar')     return await cmdAgendar(rest);
+    if (command === 'confirmar')   return await cmdConfirmar();
+    if (command === 'cancelar')    return cmdCancelar();
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
   }
@@ -544,6 +554,137 @@ async function cmdBloqueos() {
   if (!r.blocks.length) return reply('No tienes bloqueos activos. La agenda está abierta según tu plantilla.');
   const lines = r.blocks.map(b => `🚫 ${b.inicio_label} → ${b.fin_label}${b.motivo ? ` — ${b.motivo}` : ''}`);
   return reply(`Bloqueos activos (${r.blocks.length}):\n${lines.join('\n')}`);
+}
+
+// ─── Coordinación de pacientes: /paquete y /agendar (con confirmación) ──
+// Mirai arma el envío; Mia lo PREVISUALIZA y NO envía nada hasta /confirmar.
+// Un solo pendiente a la vez (solo Mirai usa esto). En memoria: si el server
+// reinicia entre el preview y el confirmar, se pierde (basta repetir el comando).
+let pendingEnvio = null;
+
+const miraiJid = () => `${config.mia.personalPhone}@s.whatsapp.net`;
+
+const USO_PAQUETE =
+  'Uso: /paquete <telefono> <nombre> <4|6> <objetivo>\n' +
+  'Ej: /paquete 51987654321 Fran 6 Procesar y manejar la ansiedad\n' +
+  'Mia arma la tarjeta y te la muestra; NO se envía hasta que respondas /confirmar.';
+const USO_AGENDAR =
+  'Uso: /agendar <telefono> <nombre>\n' +
+  'Ej: /agendar 51987654321 Fran\n' +
+  'Mia te muestra el mensaje; NO se envía hasta que respondas /confirmar.';
+
+// Envía la secuencia de mensajes al paciente, registrando + marcando ecos.
+async function enviarAPaciente(phone, nombre, mensajes) {
+  const norm = normalizePhone(phone);
+  const jid = `${norm}@s.whatsapp.net`;
+  const patient = await findPatientByPhone(norm);
+  for (const m of mensajes) {
+    let sent;
+    if (m.kind === 'image') sent = await sendImage(jid, m.url, m.caption || '');
+    else sent = await sendText(jid, m.text);
+    const id = sent?.key?.id ?? null;
+    if (id) rememberMiaSentId(id);
+    if (patient) {
+      await logMessage({
+        patientId: patient.id,
+        author: 'mia',
+        content: m.kind === 'image' ? '[plan enviado por WhatsApp]' : m.text,
+        messageType: m.kind === 'image' ? 'image' : 'text',
+        whatsappMessageId: id,
+        metadata: { kind: m.metaKind || 'coordinacion_manual' },
+      });
+    }
+  }
+  return { patient };
+}
+
+async function cmdPaquete(rest) {
+  const toks = (rest || '').trim().split(/\s+/).filter(Boolean);
+  if (toks.length < 4) return reply(USO_PAQUETE);
+  const phone = toks[0];
+  let nIdx = -1;
+  for (let i = 2; i < toks.length; i++) { if (/^\d{1,2}$/.test(toks[i])) { nIdx = i; break; } }
+  if (nIdx < 0) return reply('Falta el número de sesiones (4 o 6).\n\n' + USO_PAQUETE);
+  const nombre = toks.slice(1, nIdx).join(' ');
+  const n = parseInt(toks[nIdx], 10);
+  const objetivo = toks.slice(nIdx + 1).join(' ');
+  if (!nombre || !objetivo) return reply(USO_PAQUETE);
+
+  // Generar la tarjeta personalizada.
+  const card = await generarYSubirPlan({ phone, nombre, nSesiones: n, objetivo });
+  if (!card.ok) return reply(`⚠️ No pude generar la tarjeta: ${card.error}`);
+
+  const intro =
+    `Hola ${nombre} 🌸 Te escribe Mia, de parte de la Lic. Mirai.\n\n` +
+    `Pensamos en ti 🤍 ¿Cómo te has sentido desde tu primera sesión?\n\n` +
+    `Si quieres retomar tu proceso, la Lic. preparó un paquete de ${n} sesiones a tarifa preferente ` +
+    `(S/105 c/u en vez de S/120) y se puede pagar hasta en 4 cuotas. Te dejo el detalle 👇`;
+  const cierre = `¿Coordinamos tu siguiente sesión? 🌿`;
+
+  pendingEnvio = {
+    tipo: 'paquete', phone, nombre,
+    mensajes: [
+      { kind: 'text', text: intro, metaKind: 'paquete_intro' },
+      { kind: 'image', url: card.url, metaKind: 'paquete_plan' },
+      { kind: 'text', text: cierre, metaKind: 'paquete_cierre' },
+    ],
+  };
+
+  // Vista previa de la tarjeta a Mirai.
+  try {
+    const sent = await sendImage(miraiJid(), card.url, `Vista previa — así le llegará la tarjeta a ${nombre}`);
+    if (sent?.key?.id) rememberMiaSentId(sent.key.id);
+  } catch (e) { console.warn('[mia/commands] no pude enviar preview a Mirai:', e.message); }
+
+  return reply(
+    `📋 *Vista previa — PAQUETE para ${nombre}* (${normalizePhone(phone)})\n\n` +
+    `Se enviarán, en orden:\n1) el mensaje de saludo\n2) la tarjeta del plan (arriba ⬆️)\n3) "${cierre}"\n\n` +
+    `⚠️ AÚN NO se envió nada. Para enviarlo a ${nombre}: */confirmar*\nPara descartar: */cancelar*`
+  );
+}
+
+async function cmdAgendar(rest) {
+  const toks = (rest || '').trim().split(/\s+/).filter(Boolean);
+  if (toks.length < 2) return reply(USO_AGENDAR);
+  const phone = toks[0];
+  const nombre = toks.slice(1).join(' ');
+
+  const texto =
+    `Hola ${nombre} 🌸 Te escribe Mia, asistente de la Lic. Mirai.\n\n` +
+    `¿Coordinamos tu próxima sesión? Cuéntame qué días y horas te quedan mejor y te paso la disponibilidad 🌿`;
+
+  pendingEnvio = {
+    tipo: 'agendar', phone, nombre,
+    mensajes: [{ kind: 'text', text: texto, metaKind: 'agendar_opener' }],
+  };
+
+  return reply(
+    `📋 *Vista previa — AGENDAR con ${nombre}* (${normalizePhone(phone)})\n\n` +
+    `Mensaje que se enviará:\n— — —\n${texto}\n— — —\n\n` +
+    `⚠️ AÚN NO se envió. Para enviarlo: */confirmar*\nPara descartar: */cancelar*`
+  );
+}
+
+async function cmdConfirmar() {
+  if (!pendingEnvio) return reply('No hay ningún envío pendiente. Usa /paquete o /agendar primero.');
+  const p = pendingEnvio;
+  pendingEnvio = null;
+  try {
+    const { patient } = await enviarAPaciente(p.phone, p.nombre, p.mensajes);
+    const aviso = patient ? '' :
+      `\n\n⚠️ Ojo: ${normalizePhone(p.phone)} no está en tu lista de pacientes, así que cuando responda Mia no le seguirá el flujo automático. ` +
+      `Si quieres que lo atienda, agrégalo con /atender ${normalizePhone(p.phone)} ${p.nombre}.`;
+    return reply(`✅ Enviado a ${p.nombre} (${normalizePhone(p.phone)}).${aviso}`);
+  } catch (e) {
+    return reply(`⚠️ Error enviando a ${p.nombre}: ${e.message}\nNo se reintentó; vuelve a correr el comando si quieres.`);
+  }
+}
+
+function cmdCancelar() {
+  if (!pendingEnvio) return reply('No había nada pendiente.');
+  const n = pendingEnvio.nombre;
+  pendingEnvio = null;
+  return reply(`Cancelado. No se envió nada a ${n}.`);
 }
 
 function reply(text) {
