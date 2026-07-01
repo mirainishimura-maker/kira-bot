@@ -233,22 +233,17 @@ export function startNeuraCron() {
     return;
   }
   const tz = 'America/Lima';
-  const horas = config.neura.horas.length ? config.neura.horas : [9, 14, 20];
-  // Cada día = 1 de cada tipo, uno por horario. prefer = prioridad por slot, con
-  // respaldo si ese tipo se agotó (ej. sin carruseles → cae a single).
-  const PREFER = [
-    ['single',  'carousel', 'reel'],     // slot 1 (mañana) → post
-    ['carousel','single',   'reel'],     // slot 2 (tarde)  → carrusel
-    ['reel',    'carousel', 'single'],   // slot 3 (noche)  → reel (prime time)
-  ];
-  horas.forEach((h, i) => {
-    const prefer = PREFER[i] || null;
+  const horas = config.neura.horas.length ? config.neura.horas : [9, 12, 15, 18, 21];
+  // Modo VACIADO DE BACKLOG: publicamos en el ORDEN de la cola (FIFO), que ya
+  // viene intercalado (2 reels + relleno por día, video real primero). Sin
+  // prioridad por tipo, para que el orden intercalado se respete tal cual.
+  horas.forEach((h) => {
     cron.schedule(`0 ${h} * * *`, async () => {
-      try { await runNeuraSweep({ dry: false, prefer }); }
+      try { await runNeuraSweep({ dry: false, prefer: null }); }
       catch (err) { console.error('[neura] sweep falló:', err); }
     }, { timezone: tz });
   });
-  console.log(`[neura] cron diario | ${horas.map((h, i) => `${h}h:${PREFER[i] ? PREFER[i][0] : 'auto'}`).join(' · ')} (${tz})`);
+  console.log(`[neura] cron diario FIFO (vaciado backlog) | ${horas.join('h, ')}h (${tz})`);
 
   // Story "frase del día" (cola state.stories) en su propio horario. 0 = off.
   const sh = config.neura.storyHora;

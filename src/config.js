@@ -161,8 +161,9 @@ export const config = {
     igTokenSeed: process.env.NEURA_IG_TOKEN || '', // token inicial; luego se refresca y persiste en el bucket privado
     bucket: process.env.NEURA_BUCKET || 'neura',           // PÚBLICO — solo imágenes
     stateBucket: process.env.NEURA_STATE_BUCKET || 'neura-state', // PRIVADO — token + cola
-    // Horas (Lima) en que publica. Default 3/día. Coma-separadas.
-    horas: (process.env.NEURA_HORAS || '9,14,20')
+    // Horas (Lima) en que publica. Default 5/día (modo vaciado de backlog).
+    // Coma-separadas. Override con NEURA_HORAS.
+    horas: (process.env.NEURA_HORAS || '9,12,15,18,21')
       .split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n >= 0 && n < 24),
     // Portada del reel: ms del frame que IG usa como portada. Los reels arrancan
     // con un fade-in desde negro (~0.5s), así que el frame 0 es negro feo. 2500ms
