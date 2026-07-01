@@ -24,6 +24,7 @@ import { detectLeadNote, handleLeadIntake, handleReferralNote } from '../service
 import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/organicLead.js';
 import { createLeadAuto } from '../services/mia/patients.js';
 import { nombreValido } from '../services/mia/text.js';
+import { detectarHorarioYAvisar } from '../services/mia/horarioDetector.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -194,6 +195,10 @@ async function processMessage(data) {
   if (!member) {
     // ¿Es paciente de Mirai (módulo Mia)? Solo en privado, solo si Mia activa.
     if (channel === CHANNEL_PRIVATE && config.mia.enabled) {
+      // Salvavidas anti-olvido: si el contacto propuso una hora, avisar a Mirai
+      // (aunque Mia esté en silencio para él y ella lo atienda manual). No bloquea.
+      detectarHorarioYAvisar({ phone, nombre: data?.pushName, text }).catch(() => {});
+
       const patient = await findPatientByPhone(phone);
       if (patient) {
         // Gate: si el paciente fue silenciado (/silenciar) o dado de alta
