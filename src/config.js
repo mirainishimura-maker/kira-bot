@@ -133,6 +133,12 @@ export const config = {
       assistant: {
         enabled: process.env.NEURA_ASSISTANT_ENABLED === 'true',
       },
+      // Cerebro Claude (Anthropic) — Fase 2 de Neura (recap de GDH, reportes,
+      // reflexión). Sin la key, esas features degradan y avisan.
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY || '',
+      // Grupo de trabajo GDH que Neura observa (MUDO) para el recap diario.
+      // Default = "GDH - Ítaca HUB"; override con MIA_GDH_GROUP_JID.
+      gdhGroupJid: process.env.MIA_GDH_GROUP_JID || '120363357978846743@g.us',
       // Pago esperado para confirmar una cita (verificación del comprobante).
       // Defaults = primera consulta a Yape/Plin de Mirai. Configurable por env.
       pago: {

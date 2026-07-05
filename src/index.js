@@ -12,6 +12,7 @@ import { startRecordatoriosCron, runRecordatoriosSweep } from './services/mia/re
 import { startResenasCron, runResenasSweep } from './services/mia/resenas.js';
 import { startResumenCron, runResumenDiario } from './services/mia/resumenDiario.js';
 import { startBriefCron, runBriefMatutino } from './services/mia/briefMatutino.js';
+import { startGdhRecapCron, runGdhRecap } from './services/mia/gdhRecap.js';
 import { runMetricas } from './services/mia/metricas.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 
@@ -195,6 +196,22 @@ app.post('/admin/brief', async (req, res) => {
   }
 });
 
+// Recap del grupo GDH (Claude resume la conversación del día): dry por defecto
+// (muestra el texto sin enviar). ?dry=false lo envía a Mirai. Protegido por WEBHOOK_SECRET.
+app.post('/admin/gdh', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  const dry = !(req.query.dry === 'false' || req.query.dry === '0');
+  try {
+    res.json(await runGdhRecap({ dry }));
+  } catch (err) {
+    console.error('[admin/gdh] falló:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Métricas del embudo (IG + leads + conversión). dry por defecto (muestra texto);
 // ?dry=false lo envía al WhatsApp de Mirai. Protegido por WEBHOOK_SECRET.
 app.post('/admin/metricas', async (req, res) => {
@@ -227,6 +244,7 @@ app.listen(config.port, () => {
     startResenasCron();
     startResumenCron();
     startBriefCron();
+    startGdhRecapCron();
   }
   // NEURA (publicador de Instagram) — independiente de Mia, se auto-gatea.
   startNeuraCron();

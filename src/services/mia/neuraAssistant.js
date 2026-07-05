@@ -1,4 +1,4 @@
-// NEURA — asistente personal de Mirai (Fase 1).
+// NEURA — asistente personal de Mirai (Fase 1 + 2).
 // Interpreta instrucciones en lenguaje natural (voz transcrita o texto) que
 // Mirai le manda a Mia desde su número personal, y las ejecuta:
 //   · registrar un gasto/ingreso   → tabla finances
@@ -6,6 +6,7 @@
 //   · consultar su agenda           → calendario (sesiones próximas)
 //   · nota de sesión de un paciente → tabla sessions (continuidad clínica)
 //   · pago de un paciente           → tabla payments (saldos)
+//   · recap del grupo GDH           → Claude resume el grupo de trabajo (Fase 2)
 // Escribe en el Supabase de Mirai (las MISMAS tablas que muestra el panel Neura).
 //
 // Se usa SOLO detrás del flag config.mia.assistant.enabled (NEURA_ASSISTANT_
@@ -16,6 +17,7 @@
 import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
 import { listUpcomingAppointments, slotLabel } from './calendar.js';
+import { runGdhRecap } from './gdhRecap.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -23,7 +25,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
@@ -44,6 +46,7 @@ Reglas:
   sesion.patient_name = el nombre del paciente. sesion.summary = lo que trabajaron. sesion.homework = tarea que le dejó (o null).
   sesion.next_focus = qué ver la próxima (o null).
 - AGENDA: "qué tengo hoy / mi agenda / mis citas / qué sigue" → consultar_agenda.
+- GDH: "resúmeme el GDH / qué pasó en el grupo / recap del trabajo / qué se dijo en GDH / resumen del grupo" → consultar_gdh.
 - Si NO es claramente una de esas, intent = "ninguno" y todo lo demás null.`;
 
 async function classify(text) {
@@ -89,6 +92,7 @@ export async function handleNeuraInstruction(text) {
     case 'consultar_agenda':     return consultarAgenda();
     case 'nota_sesion':          return notaSesion(parsed.sesion, text);
     case 'registrar_pago':       return registrarPago(parsed.pago, text);
+    case 'consultar_gdh':        return consultarGdh();
     default: return { handled: false };
   }
 }
@@ -168,4 +172,15 @@ async function registrarPago(p, raw) {
   if (e) { console.error('[neura] pago insert:', e.message); return { handled: true, reply: 'Uy, no pude registrar el pago. ¿Me lo repites?' }; }
   const met = p.method ? ` (${p.method.trim()})` : '';
   return { handled: true, reply: `💰 Pago registrado: ${money(amount)} de ${patient.nombre}${met}.\nLo ves en Neura → Pacientes ✦` };
+}
+
+async function consultarGdh() {
+  try {
+    const r = await runGdhRecap({ dry: true });
+    if (!r.ok) return { handled: true, reply: 'No pude leer el grupo GDH ahora mismo ✦' };
+    return { handled: true, reply: r.texto };
+  } catch (e) {
+    console.error('[neura] gdh:', e.message);
+    return { handled: true, reply: 'No pude armar el recap del GDH ahora ✦' };
+  }
 }
