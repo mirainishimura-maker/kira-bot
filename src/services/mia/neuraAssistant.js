@@ -32,7 +32,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
@@ -84,7 +84,8 @@ Reglas:
 - ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
   espiritual.content = el contenido en breve, tal como lo dice.
 - REFLEXIÓN (que Neura RESPONDA pensando con ella): si Mirai reflexiona, plantea una duda o dilema ("¿debería ir o no?"), te pide tu opinión o una perspectiva, se desahoga, piensa en voz alta, o te hace una pregunta personal → reflexion. (Ojo: agradecer/orar es "espiritual", no "reflexion".)
-- Si es solo un "ok / gracias / jaja" o ruido sin intención, intent = "ninguno". Para lo demás que no calce en una acción concreta pero SÍ sea una reflexión o desahogo, usa "reflexion".`;
+- AYUDA: "¿qué puedes hacer? / ayuda / en qué me ayudas / qué sabes hacer / cómo te uso / opciones" → ayuda.
+- Si es solo un "ok / gracias / jaja / 👍" o puro ruido sin intención, intent = "ninguno". CUALQUIER otra cosa que Mirai te diga —una pregunta, un comentario, algo que te cuenta, una duda, pensar en voz alta, o algo que simplemente no calza en las acciones de arriba— usa "reflexion", para que Mia SIEMPRE le responda con calidez. Nunca la dejes sin respuesta.`;
 
 async function classify(text) {
   const nowLima = new Date().toLocaleString('sv-SE', { timeZone: 'America/Lima' });
@@ -148,6 +149,7 @@ export async function handleNeuraInstruction(text) {
     case 'reporte_pdf':          return enviarReportePdf();
     case 'espiritual':           return registrarEspiritual(parsed.espiritual, text);
     case 'reflexion':            return reflexionar(text);
+    case 'ayuda':                return ayudaMenu();
     default: return { handled: false };
   }
 }
@@ -478,4 +480,18 @@ async function reflexionar(text) {
   const reply = await handleReflexion(text);
   if (!reply) return { handled: false };
   return { handled: true, reply, speak: true };
+}
+
+function ayudaMenu() {
+  const txt = `🌿 *Soy Mia, tu asistente.* Háblame normal (texto o audio) y yo me encargo:
+
+💰 *Plata* — "gasté 20 en el taxi" · "¿en qué se me fue la plata?"
+🩺 *Consultorio* — "terminé con Ana, trabajamos…" · "Ana me pagó 105" · "Ana me debe 105" · "¿quién me debe?" · "¿qué trabajé con Ana?" · "agéndame a Ana el martes 4pm"
+🗓️ *Tu día* — "¿qué tengo hoy?" · "recuérdame las pastillas a las 9" · "ya tomé las pastillas"
+🫂 *Tu gente* — "agrega a mi mamá" · "llamé a mi mamá"
+🫀 *Tú* — "tomé 2 litros de agua" · "dormí 6 horas" · "hoy me siento cansada" · "hoy agradezco por…"
+📝 *Recordar y pensar* — "apunta que el wifi es…" · "hazme un reporte de…" · "ayúdame a pensar si…"
+
+Y si solo quieres conversar o pensar algo conmigo, también estoy aquí 💛`;
+  return { handled: true, reply: txt };
 }
