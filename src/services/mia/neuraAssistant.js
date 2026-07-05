@@ -32,7 +32,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
@@ -42,6 +42,7 @@ Formato exacto:
   "consulta_paciente": { "patient_name": string, "aspecto": "sesion" | "saldo" | "cita" | "todo" } | null,
   "nota": { "content": string, "topic": string | null } | null,
   "busqueda_nota": { "query": string } | null,
+  "buscar": { "query": string } | null,
   "animo": { "mood": string, "score": number | null, "note": string | null } | null,
   "habito": { "kind": "agua" | "sueño" | "ejercicio" | "comida" | "descanso" | "disfrute" | "otro", "amount": number | null, "unit": string | null, "note": string | null } | null,
   "persona": { "name": string, "relation": string | null, "phone": string | null, "birthday": string | null } | null,
@@ -77,6 +78,7 @@ Reglas:
 - CONSULTAR PACIENTE: "qué trabajé/vi con X / cómo va X / cuánto me debe X / cuándo veo a X / cuándo es la cita de X" → consultar_paciente. consulta_paciente.patient_name; aspecto = "sesion" | "saldo" | "cita" | "todo".
 - GUARDAR NOTA: "apunta que / anota que / recuerda que <DATO> / guarda que / agrega X a la lista de Y" (un DATO o ítem SIN hora ni acción por hacer; NO es recordatorio) → guardar_nota. nota.content = el dato tal cual; nota.topic = tema en 1-2 palabras (ej "wifi", "lista de compras").
 - CONSULTAR NOTA: "qué anoté de X / cuál era el X / qué tengo en la lista de Y / dime el dato de X" → consultar_nota. busqueda_nota.query = a qué se refiere (pocas palabras).
+- BUSCAR (global, en todo Neura): "busca X / búscame todo lo de X / encuentra Y / ¿dónde está Z? / qué tengo sobre W" → buscar. buscar.query = qué busca.
 - CHECK-IN DE ÁNIMO: "hoy me siento X / estoy X / me siento <emoción> / ando <estado>" (Mirai DECLARA su estado emocional, no pide consejo) → registrar_animo. animo.mood = la emoción en 1-2 palabras; animo.score = 1 (muy mal) a 5 (muy bien) si se infiere, si no null; animo.note = detalle si lo da. (Si PIDE perspectiva o ayuda a decidir → reflexion, no animo.)
 - SALUD / HÁBITO / DESCANSO: "tomé X de agua / dormí X horas / hice ejercicio (X min) / comí ... / caminé / hoy descansé / vi una peli / salí a pasear / me di un gusto" → registrar_habito. habito.kind ∈ [agua, sueño, ejercicio, comida, descanso, disfrute, otro]; amount+unit si da cantidad (ej 2 "litros", 6 "horas", 30 "min"); note = detalle.
 - AGREGAR PERSONA: "agrega a mi mamá / registra a mi amiga X / anota a mi pareja Y (cumple el <fecha>, su número es ...)" → agregar_persona. persona.name = nombre; persona.relation = vínculo (mamá, pareja, amiga, hermano...); persona.phone si lo da; persona.birthday = ISO YYYY-MM-DD si la da.
@@ -140,6 +142,7 @@ export async function handleNeuraInstruction(text) {
     case 'consultar_paciente':   return consultarPaciente(parsed.consulta_paciente);
     case 'guardar_nota':         return guardarNota(parsed.nota, text);
     case 'consultar_nota':       return consultarNota(parsed.busqueda_nota);
+    case 'buscar':               return buscarGlobal(parsed.buscar);
     case 'registrar_animo':      return registrarAnimo(parsed.animo, text);
     case 'registrar_habito':     return registrarHabito(parsed.habito, text);
     case 'agregar_persona':      return agregarPersona(parsed.persona, text);
@@ -388,6 +391,31 @@ async function consultarNota(b) {
   if (!rows.length) return { handled: true, reply: `No encontré nada anotado sobre "${q}" 🤔` };
   const lines = rows.map((r) => `• ${r.content}`).join('\n');
   return { handled: true, reply: `📒 Sobre "${q}":\n${lines}` };
+}
+
+// Búsqueda global: revisa todas tus áreas de una (idea de Notion: buen buscador).
+async function buscarGlobal(b) {
+  if (!b || !b.query) return { handled: false };
+  const q = b.query.replace(/[,()%]/g, ' ').trim();
+  if (q.length < 2) return { handled: false };
+  const like = `%${q}%`;
+  const [notes, ppl, pats, ses, spir, fin] = await Promise.all([
+    miraiSupabase.from('notes').select('content').or(`content.ilike.${like},topic.ilike.${like}`).limit(5),
+    miraiSupabase.from('people').select('name, relation').or(`name.ilike.${like},relation.ilike.${like}`).limit(5),
+    miraiSupabase.from('patients').select('nombre').ilike('nombre', like).neq('phone', '51904301391').limit(5),
+    miraiSupabase.from('sessions').select('summary').ilike('summary', like).limit(3),
+    miraiSupabase.from('spiritual').select('content').ilike('content', like).limit(3),
+    miraiSupabase.from('finances').select('description, category, amount').or(`description.ilike.${like},category.ilike.${like}`).limit(4),
+  ]);
+  const lines = [];
+  (notes.data || []).forEach((r) => lines.push(`📝 ${r.content}`));
+  (ppl.data || []).forEach((r) => lines.push(`🫂 ${r.name}${r.relation ? ` (${r.relation})` : ''}`));
+  (pats.data || []).forEach((r) => lines.push(`🩺 ${r.nombre}`));
+  (ses.data || []).forEach((r) => lines.push(`📋 ${r.summary}`));
+  (spir.data || []).forEach((r) => lines.push(`🙏 ${r.content}`));
+  (fin.data || []).forEach((r) => lines.push(`💰 ${r.description || r.category} — ${money(r.amount)}`));
+  if (!lines.length) return { handled: true, reply: `No encontré nada sobre "${q}" en tu Neura 🤔` };
+  return { handled: true, reply: `🔎 Encontré esto sobre "${q}":\n${lines.slice(0, 10).join('\n')}` };
 }
 
 // ---- Ánimo (check-in de bienestar) ----
