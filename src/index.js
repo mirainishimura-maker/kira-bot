@@ -16,6 +16,7 @@ import { startGdhRecapCron, runGdhRecap } from './services/mia/gdhRecap.js';
 import { startResumenFinanzasCron, runResumenFinanzas } from './services/mia/resumenFinanzas.js';
 import { startSesionPrepCron, runSesionPrep } from './services/mia/sesionPrep.js';
 import { startAgendaSyncCron, runAgendaSync } from './services/mia/agendaSync.js';
+import { startGenteCron, runGenteCheck } from './services/mia/gente.js';
 import { runMetricas } from './services/mia/metricas.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 
@@ -264,6 +265,18 @@ app.post('/admin/agenda-sync', async (req, res) => {
   catch (err) { console.error('[admin/agenda-sync] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
 });
 
+// Cuidar tus vínculos (cumpleaños + con quién llevas rato sin hablar): dry por
+// defecto (muestra el texto); ?dry=false lo envía. Protegido por WEBHOOK_SECRET.
+app.post('/admin/gente', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  const dry = !(req.query.dry === 'false' || req.query.dry === '0');
+  try { res.json(await runGenteCheck({ dry })); }
+  catch (err) { console.error('[admin/gente] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
+});
+
 app.listen(config.port, () => {
   const mode = config.miaOnly ? 'MIA-ONLY (sin KIRA-mkt)' : 'completo (KIRA-mkt + Mia)';
   console.log(`[kira] escuchando en :${config.port} (${config.env}, TZ=${config.tz}) | modo: ${mode}`);
@@ -284,6 +297,7 @@ app.listen(config.port, () => {
     startResumenFinanzasCron();
     startSesionPrepCron();
     startAgendaSyncCron();
+    startGenteCron();
   }
   // NEURA (publicador de Instagram) — independiente de Mia, se auto-gatea.
   startNeuraCron();

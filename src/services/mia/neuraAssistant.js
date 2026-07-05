@@ -32,7 +32,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "espiritual" | "reflexion" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
@@ -43,6 +43,9 @@ Formato exacto:
   "nota": { "content": string, "topic": string | null } | null,
   "busqueda_nota": { "query": string } | null,
   "animo": { "mood": string, "score": number | null, "note": string | null } | null,
+  "habito": { "kind": "agua" | "sueño" | "ejercicio" | "comida" | "descanso" | "disfrute" | "otro", "amount": number | null, "unit": string | null, "note": string | null } | null,
+  "persona": { "name": string, "relation": string | null, "phone": string | null, "birthday": string | null } | null,
+  "contacto": { "person": string } | null,
   "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
   "completar": { "title": string } | null
 }
@@ -75,6 +78,9 @@ Reglas:
 - GUARDAR NOTA: "apunta que / anota que / recuerda que <DATO> / guarda que / agrega X a la lista de Y" (un DATO o ítem SIN hora ni acción por hacer; NO es recordatorio) → guardar_nota. nota.content = el dato tal cual; nota.topic = tema en 1-2 palabras (ej "wifi", "lista de compras").
 - CONSULTAR NOTA: "qué anoté de X / cuál era el X / qué tengo en la lista de Y / dime el dato de X" → consultar_nota. busqueda_nota.query = a qué se refiere (pocas palabras).
 - CHECK-IN DE ÁNIMO: "hoy me siento X / estoy X / me siento <emoción> / ando <estado>" (Mirai DECLARA su estado emocional, no pide consejo) → registrar_animo. animo.mood = la emoción en 1-2 palabras; animo.score = 1 (muy mal) a 5 (muy bien) si se infiere, si no null; animo.note = detalle si lo da. (Si PIDE perspectiva o ayuda a decidir → reflexion, no animo.)
+- SALUD / HÁBITO / DESCANSO: "tomé X de agua / dormí X horas / hice ejercicio (X min) / comí ... / caminé / hoy descansé / vi una peli / salí a pasear / me di un gusto" → registrar_habito. habito.kind ∈ [agua, sueño, ejercicio, comida, descanso, disfrute, otro]; amount+unit si da cantidad (ej 2 "litros", 6 "horas", 30 "min"); note = detalle.
+- AGREGAR PERSONA: "agrega a mi mamá / registra a mi amiga X / anota a mi pareja Y (cumple el <fecha>, su número es ...)" → agregar_persona. persona.name = nombre; persona.relation = vínculo (mamá, pareja, amiga, hermano...); persona.phone si lo da; persona.birthday = ISO YYYY-MM-DD si la da.
+- CONTACTO YA HECHO (pasado): "llamé a mi mamá / hablé con X / le escribí a Y / vi a Z / almorcé con W" → contacto_persona. contacto.person = a quién. (Ojo: "recuérdame llamar a X" es recordatorio; "agrega a X" es agregar_persona.)
 - ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
   espiritual.content = el contenido en breve, tal como lo dice.
 - REFLEXIÓN (que Neura RESPONDA pensando con ella): si Mirai reflexiona, plantea una duda o dilema ("¿debería ir o no?"), te pide tu opinión o una perspectiva, se desahoga, piensa en voz alta, o te hace una pregunta personal → reflexion. (Ojo: agradecer/orar es "espiritual", no "reflexion".)
@@ -134,6 +140,9 @@ export async function handleNeuraInstruction(text) {
     case 'guardar_nota':         return guardarNota(parsed.nota, text);
     case 'consultar_nota':       return consultarNota(parsed.busqueda_nota);
     case 'registrar_animo':      return registrarAnimo(parsed.animo, text);
+    case 'registrar_habito':     return registrarHabito(parsed.habito, text);
+    case 'agregar_persona':      return agregarPersona(parsed.persona, text);
+    case 'contacto_persona':     return contactoPersona(parsed.contacto);
     case 'consultar_gdh':        return consultarGdh();
     case 'reporte':              return hacerReporte(text);
     case 'reporte_pdf':          return enviarReportePdf();
@@ -392,6 +401,48 @@ async function registrarAnimo(a, raw) {
     ? 'Gracias por contármelo. Si quieres, respira conmigo un momento… estoy aquí 💗'
     : 'Anotado 💗 Qué lindo que te tomes el pulso a ti misma.';
   return { handled: true, reply: `Registré cómo te sientes: *${a.mood.trim()}*.\n${cierre}`, speak: true };
+}
+
+// ---- Salud / hábitos / descanso (tabla life_log) ----
+async function registrarHabito(h, raw) {
+  if (!h || !h.kind) return { handled: false };
+  const kinds = ['agua', 'sueño', 'ejercicio', 'comida', 'descanso', 'disfrute', 'otro'];
+  const kind = kinds.includes(h.kind) ? h.kind : 'otro';
+  const amount = Number.isFinite(Number(h.amount)) ? Number(h.amount) : null;
+  const { error } = await miraiSupabase.from('life_log').insert({
+    kind, amount, unit: h.unit?.trim() || null, note: h.note?.trim() || null, source: 'voz', raw_text: raw,
+  });
+  if (error) { console.error('[neura] habito insert:', error.message); return { handled: true, reply: 'Uy, no pude anotarlo. ¿Me lo repites?' }; }
+  const emo = { agua: '💧', 'sueño': '😴', ejercicio: '🏃‍♀️', comida: '🍽️', descanso: '🌿', disfrute: '🎈', otro: '✦' }[kind];
+  const cant = amount != null ? ` (${amount}${h.unit ? ' ' + h.unit.trim() : ''})` : '';
+  return { handled: true, reply: `${emo} Anotado: ${kind}${cant}.\nLo ves en Neura → Vida ✦` };
+}
+
+// ---- Tu gente (relaciones) ----
+async function agregarPersona(p, raw) {
+  if (!p || !p.name || !p.name.trim()) return { handled: false };
+  const { error } = await miraiSupabase.from('people').insert({
+    name: p.name.trim(), relation: p.relation?.trim() || null,
+    phone: p.phone?.trim() || null, birthday: p.birthday || null,
+    last_contact: new Date().toISOString(), source: 'voz',
+  });
+  if (error) { console.error('[neura] persona insert:', error.message); return { handled: true, reply: 'Uy, no pude guardarla. ¿Me repites el nombre?' }; }
+  return { handled: true, reply: `🫂 Guardé a ${p.name.trim()}${p.relation ? ` (${p.relation.trim()})` : ''} en tu gente.\nTe avisaré si pasa mucho sin que la busques 💛` };
+}
+
+async function contactoPersona(c) {
+  if (!c || !c.person || !c.person.trim()) return { handled: false };
+  const term = c.person.trim().replace(/[,()%]/g, ' ').trim();
+  if (!term) return { handled: false };
+  const { data } = await miraiSupabase.from('people')
+    .select('id, name').or(`name.ilike.%${term}%,relation.ilike.%${term}%`).limit(3);
+  const rows = data ?? [];
+  if (!rows.length) {
+    await miraiSupabase.from('people').insert({ name: c.person.trim(), last_contact: new Date().toISOString(), source: 'voz' });
+    return { handled: true, reply: `💛 Anotado que hablaste con ${c.person.trim()}. La agregué a tu gente.` };
+  }
+  await miraiSupabase.from('people').update({ last_contact: new Date().toISOString() }).eq('id', rows[0].id);
+  return { handled: true, reply: `💛 Listo, anoté que hablaste con ${rows[0].name}. Qué lindo cuidar tus vínculos.` };
 }
 
 async function consultarGdh() {
