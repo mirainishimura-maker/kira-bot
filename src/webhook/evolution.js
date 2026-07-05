@@ -25,6 +25,7 @@ import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/
 import { createLeadAuto } from '../services/mia/patients.js';
 import { nombreValido } from '../services/mia/text.js';
 import { detectarHorarioYAvisar } from '../services/mia/horarioDetector.js';
+import { handleNeuraInstruction } from '../services/mia/neuraAssistant.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -95,6 +96,40 @@ async function processMessage(data) {
       return;
     }
     if (!isAddressedToKira(text)) return;
+  }
+
+  // ---- NEURA · asistente personal de Mirai (voz/texto natural) ----
+  // Detrás del flag config.mia.assistant.enabled. SOLO el número personal de
+  // Mirai. Intercepta únicamente instrucciones reconocidas (gasto, recordatorio,
+  // agenda); si no reconoce, cae al flujo de siempre (que hoy la ignora en
+  // silencio). Nunca toca comandos "/..." ni notas de lead. Maneja también
+  // AUDIO (que el bloque de abajo no procesa, porque exige `text`).
+  if (channel === CHANNEL_PRIVATE && config.mia.enabled && config.mia.assistant?.enabled) {
+    const miraiPhone = phoneFromJid(remoteJid);
+    if (miraiPhone === config.mia.personalPhone) {
+      let instruction = text;
+      if (!instruction) {
+        const c = classifyMessage(data);
+        if (c.kind === 'audio') {
+          const media = await fetchMessageMediaBase64(data);
+          if (media?.base64) {
+            instruction = await transcribeAudio({ base64: media.base64, mimetype: media.mimetype });
+          }
+        }
+      }
+      if (instruction && !isMiaCommand(instruction) && !detectLeadNote(instruction)) {
+        try {
+          const res = await handleNeuraInstruction(instruction);
+          if (res?.handled) {
+            console.log(`[neura] instrucción de Mirai atendida: "${instruction.slice(0, 80)}"`);
+            await dispatchMessages([{ channel: 'private', text: res.reply }], { senderJid: remoteJid });
+            return;
+          }
+        } catch (err) {
+          console.error('[neura] error en asistente:', err.message);
+        }
+      }
+    }
   }
 
   // ---- Comandos de Mia y notas de leads ----

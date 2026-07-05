@@ -126,6 +126,13 @@ export const config = {
       recordatorios: {
         enabled: process.env.MIA_RECORDATORIOS_ENABLED === 'true',
       },
+      // NEURA — asistente personal de Mirai por voz/texto natural (Fase 1).
+      // Apagado por defecto: el webhook solo intercepta los mensajes de Mirai
+      // (para registrar gasto / recordatorio / consultar agenda) si
+      // NEURA_ASSISTANT_ENABLED=true. Sin el flag, cero cambios de comportamiento.
+      assistant: {
+        enabled: process.env.NEURA_ASSISTANT_ENABLED === 'true',
+      },
       // Pago esperado para confirmar una cita (verificación del comprobante).
       // Defaults = primera consulta a Yape/Plin de Mirai. Configurable por env.
       pago: {
