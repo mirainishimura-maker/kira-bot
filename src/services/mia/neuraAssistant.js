@@ -23,6 +23,7 @@ import { listUpcomingAppointments, slotLabel } from './calendar.js';
 import { runGdhRecap } from './gdhRecap.js';
 import { handleReflexion } from './reflexion.js';
 import { handleReporte } from './reporte.js';
+import { enviarReportePdf } from './reportePdf.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -30,7 +31,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "espiritual" | "reflexion" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "espiritual" | "reflexion" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
@@ -56,6 +57,7 @@ Reglas:
 - AGENDA: "qué tengo hoy / mi agenda / mis citas / qué sigue" → consultar_agenda.
 - GDH: "resúmeme el GDH / qué pasó en el grupo / recap del trabajo / qué se dijo en GDH / resumen del grupo" → consultar_gdh.
 - REPORTE: "hazme un reporte de / ármame un informe sobre / redáctame un reporte / necesito un informe de / prepárame un documento sobre ..." → reporte.
+- REPORTE PDF: "mándalo en PDF / pásalo a PDF / hazme el documento / quiero el reporte en PDF / mándame el documento / en PDF ..." (se refiere al reporte que se acaba de armar) → reporte_pdf.
 - ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
   espiritual.content = el contenido en breve, tal como lo dice.
 - REFLEXIÓN (que Neura RESPONDA pensando con ella): si Mirai reflexiona, plantea una duda o dilema ("¿debería ir o no?"), te pide tu opinión o una perspectiva, se desahoga, piensa en voz alta, o te hace una pregunta personal → reflexion. (Ojo: agradecer/orar es "espiritual", no "reflexion".)
@@ -107,6 +109,7 @@ export async function handleNeuraInstruction(text) {
     case 'registrar_pago':       return registrarPago(parsed.pago, text);
     case 'consultar_gdh':        return consultarGdh();
     case 'reporte':              return hacerReporte(text);
+    case 'reporte_pdf':          return enviarReportePdf();
     case 'espiritual':           return registrarEspiritual(parsed.espiritual, text);
     case 'reflexion':            return reflexionar(text);
     default: return { handled: false };
@@ -221,7 +224,7 @@ async function consultarGdh() {
 async function hacerReporte(text) {
   const reply = await handleReporte(text);
   if (!reply) return { handled: false };
-  return { handled: true, reply };
+  return { handled: true, reply: `${reply}\n\n— _¿te lo mando en PDF? dime "en PDF"_ ✦` };
 }
 
 async function registrarEspiritual(e, raw) {

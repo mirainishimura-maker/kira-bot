@@ -45,3 +45,11 @@ export async function handleReporte(text) {
   while (history.length > MAX_MSGS) history.shift();
   return reply;
 }
+
+// Devuelve el último reporte redactado (para pasarlo a PDF), o null si no hay.
+export function getLastReport() {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role === 'assistant') return history[i].content;
+  }
+  return null;
+}
