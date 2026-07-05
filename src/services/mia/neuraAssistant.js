@@ -24,6 +24,7 @@ import { runGdhRecap } from './gdhRecap.js';
 import { handleReflexion } from './reflexion.js';
 import { handleReporte } from './reporte.js';
 import { enviarReportePdf } from './reportePdf.js';
+import { buildResumenFinanzas } from './resumenFinanzas.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -31,11 +32,12 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "espiritual" | "reflexion" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "espiritual" | "reflexion" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
   "pago": { "patient_name": string, "amount": number, "method": string | null } | null,
+  "cargo": { "patient_name": string, "amount": number | null, "sessions": number | null, "concept": string | null } | null,
   "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
   "completar": { "title": string } | null
 }
@@ -58,6 +60,9 @@ Reglas:
 - GDH: "resúmeme el GDH / qué pasó en el grupo / recap del trabajo / qué se dijo en GDH / resumen del grupo" → consultar_gdh.
 - REPORTE: "hazme un reporte de / ármame un informe sobre / redáctame un reporte / necesito un informe de / prepárame un documento sobre ..." → reporte.
 - REPORTE PDF: "mándalo en PDF / pásalo a PDF / hazme el documento / quiero el reporte en PDF / mándame el documento / en PDF ..." (se refiere al reporte que se acaba de armar) → reporte_pdf.
+- CARGO / DEUDA DE PACIENTE (lo que un paciente DEBE, NO lo que pagó): "X me debe 105 / cóbrale a X / X quedó debiendo / ponle una sesión pendiente a X / X tiene 2 sesiones sin pagar" → registrar_cargo. cargo.patient_name = nombre. cargo.amount = soles si lo dice, si no null. cargo.sessions = número de sesiones si lo menciona (o null). cargo.concept = breve (o null). (Ojo: "me pagó / me abonó" es registrar_pago, no cargo.)
+- CONSULTAR DEUDAS: "quién me debe / quiénes están debiendo / saldos / cuánto me deben / quién tiene pendiente de pago" → consultar_deudas.
+- CONSULTAR FINANZAS: "en qué se me fue la plata / resumen de mis finanzas / cuánto gasté esta semana / mis gastos / cómo voy de plata" → consultar_finanzas.
 - ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
   espiritual.content = el contenido en breve, tal como lo dice.
 - REFLEXIÓN (que Neura RESPONDA pensando con ella): si Mirai reflexiona, plantea una duda o dilema ("¿debería ir o no?"), te pide tu opinión o una perspectiva, se desahoga, piensa en voz alta, o te hace una pregunta personal → reflexion. (Ojo: agradecer/orar es "espiritual", no "reflexion".)
@@ -107,6 +112,9 @@ export async function handleNeuraInstruction(text) {
     case 'consultar_agenda':     return consultarAgenda();
     case 'nota_sesion':          return notaSesion(parsed.sesion, text);
     case 'registrar_pago':       return registrarPago(parsed.pago, text);
+    case 'registrar_cargo':      return registrarCargo(parsed.cargo, text);
+    case 'consultar_deudas':     return consultarDeudas();
+    case 'consultar_finanzas':   return consultarFinanzas();
     case 'consultar_gdh':        return consultarGdh();
     case 'reporte':              return hacerReporte(text);
     case 'reporte_pdf':          return enviarReportePdf();
@@ -207,7 +215,67 @@ async function registrarPago(p, raw) {
   });
   if (e) { console.error('[neura] pago insert:', e.message); return { handled: true, reply: 'Uy, no pude registrar el pago. ¿Me lo repites?' }; }
   const met = p.method ? ` (${p.method.trim()})` : '';
-  return { handled: true, reply: `💰 Pago registrado: ${money(amount)} de ${patient.nombre}${met}.\nLo ves en Neura → Pacientes ✦` };
+  const saldo = await balancePaciente(patient.id);
+  const saldoLine = saldo > 0.5 ? `\nAún debe: *${money(saldo)}*.` : saldo < -0.5 ? '\n(quedó a favor)' : '\n¡Al día! ✅';
+  return { handled: true, reply: `💰 Pago registrado: ${money(amount)} de ${patient.nombre}${met}.${saldoLine}\nLo ves en Neura → Pacientes ✦` };
+}
+
+// Saldo de un paciente = SUMA(cargos) − SUMA(pagos).
+async function balancePaciente(patientId) {
+  const [ch, pa] = await Promise.all([
+    miraiSupabase.from('charges').select('amount').eq('patient_id', patientId),
+    miraiSupabase.from('payments').select('amount').eq('patient_id', patientId),
+  ]);
+  const sum = (r) => (r.data ?? []).reduce((a, x) => a + Number(x.amount || 0), 0);
+  return sum(ch) - sum(pa);
+}
+
+async function registrarCargo(c, raw) {
+  if (!c || !c.patient_name) return { handled: false };
+  const { patient, error } = await resolvePatient(c.patient_name);
+  if (error) return { handled: true, reply: error };
+  const DEFAULT_RATE = 105;
+  let amount = Number(c.amount);
+  const sessions = Number(c.sessions);
+  let note = '';
+  if (!Number.isFinite(amount) || amount <= 0) {
+    if (Number.isFinite(sessions) && sessions > 0) { amount = sessions * DEFAULT_RATE; note = ` (${sessions} × ${money(DEFAULT_RATE)})`; }
+    else return { handled: true, reply: `¿Cuánto le cargo a ${patient.nombre}? Dime por ejemplo "${patient.nombre} me debe 105" 🙂` };
+  }
+  const { error: e } = await miraiSupabase.from('charges').insert({
+    patient_id: patient.id, amount, currency: 'PEN',
+    concept: c.concept?.trim() || 'sesión', source: 'voz', raw_text: raw,
+  });
+  if (e) { console.error('[neura] cargo insert:', e.message); return { handled: true, reply: 'Uy, no pude registrar el cargo. ¿Me lo repites?' }; }
+  const saldo = await balancePaciente(patient.id);
+  return { handled: true, reply: `🧾 Anotado: ${patient.nombre} debe ${money(amount)}${note}.\nSaldo actual: *${money(saldo)}*.\nLo ves en Neura → Pacientes ✦` };
+}
+
+async function consultarDeudas() {
+  const [pRes, cRes, payRes] = await Promise.all([
+    miraiSupabase.from('patients').select('id, nombre').neq('phone', '51904301391'),
+    miraiSupabase.from('charges').select('patient_id, amount'),
+    miraiSupabase.from('payments').select('patient_id, amount'),
+  ]);
+  const bal = new Map();
+  for (const c of cRes.data ?? []) bal.set(c.patient_id, (bal.get(c.patient_id) || 0) + Number(c.amount || 0));
+  for (const p of payRes.data ?? []) bal.set(p.patient_id, (bal.get(p.patient_id) || 0) - Number(p.amount || 0));
+  const nameOf = new Map((pRes.data ?? []).map((p) => [p.id, p.nombre]));
+  const deudores = [...bal.entries()].filter(([id, v]) => v > 0.5 && nameOf.has(id)).sort((a, b) => b[1] - a[1]);
+  if (!deudores.length) return { handled: true, reply: '✅ ¡Nadie te debe! Todos tus pacientes están al día 🎉' };
+  const lines = deudores.map(([id, v]) => `• ${nameOf.get(id)}: *${money(v)}*`).join('\n');
+  const total = deudores.reduce((a, [, v]) => a + v, 0);
+  return { handled: true, reply: `🧾 *Quién te debe:*\n${lines}\n\nTotal por cobrar: *${money(total)}* ✦` };
+}
+
+async function consultarFinanzas() {
+  try {
+    const texto = await buildResumenFinanzas({ period: 'semana' });
+    return { handled: true, reply: texto };
+  } catch (e) {
+    console.error('[neura] finanzas:', e.message);
+    return { handled: true, reply: 'No pude armar tu resumen de finanzas ahora ✦' };
+  }
 }
 
 async function consultarGdh() {
