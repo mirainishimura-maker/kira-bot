@@ -9,6 +9,7 @@
 //   · recap del grupo GDH           → Claude resume el grupo de trabajo (Fase 2)
 //   · reflexión / coaching          → Claude piensa CON ella (Fase 2)
 //   · reporte / informe             → Claude le redacta un reporte (Fase 2)
+//   · espiritual                    → gratitud / reflexión / oración / lectura (Fase 2)
 // Escribe en el Supabase de Mirai (las MISMAS tablas que muestra el panel Neura).
 //
 // Se usa SOLO detrás del flag config.mia.assistant.enabled (NEURA_ASSISTANT_
@@ -29,11 +30,12 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reflexion" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "espiritual" | "reflexion" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
-  "pago": { "patient_name": string, "amount": number, "method": string | null } | null
+  "pago": { "patient_name": string, "amount": number, "method": string | null } | null,
+  "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null
 }
 
 Reglas:
@@ -52,8 +54,10 @@ Reglas:
 - AGENDA: "qué tengo hoy / mi agenda / mis citas / qué sigue" → consultar_agenda.
 - GDH: "resúmeme el GDH / qué pasó en el grupo / recap del trabajo / qué se dijo en GDH / resumen del grupo" → consultar_gdh.
 - REPORTE: "hazme un reporte de / ármame un informe sobre / redáctame un reporte / necesito un informe de / prepárame un documento sobre ..." → reporte.
-- REFLEXIÓN: si Mirai reflexiona, plantea una duda o dilema ("¿debería ir o no?"), te pide tu opinión o una perspectiva, se desahoga, piensa en voz alta, o te hace una pregunta personal → reflexion.
-- Si es solo un "ok / gracias / jaja" o ruido sin intención, intent = "ninguno". Para lo demás que no calce en una acción concreta pero SÍ sea una reflexión, duda o desahogo, usa "reflexion".`;
+- ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
+  espiritual.content = el contenido en breve, tal como lo dice.
+- REFLEXIÓN (que Neura RESPONDA pensando con ella): si Mirai reflexiona, plantea una duda o dilema ("¿debería ir o no?"), te pide tu opinión o una perspectiva, se desahoga, piensa en voz alta, o te hace una pregunta personal → reflexion. (Ojo: agradecer/orar es "espiritual", no "reflexion".)
+- Si es solo un "ok / gracias / jaja" o ruido sin intención, intent = "ninguno". Para lo demás que no calce en una acción concreta pero SÍ sea una reflexión o desahogo, usa "reflexion".`;
 
 async function classify(text) {
   const nowLima = new Date().toLocaleString('sv-SE', { timeZone: 'America/Lima' });
@@ -100,6 +104,7 @@ export async function handleNeuraInstruction(text) {
     case 'registrar_pago':       return registrarPago(parsed.pago, text);
     case 'consultar_gdh':        return consultarGdh();
     case 'reporte':              return hacerReporte(text);
+    case 'espiritual':           return registrarEspiritual(parsed.espiritual, text);
     case 'reflexion':            return reflexionar(text);
     default: return { handled: false };
   }
@@ -195,12 +200,24 @@ async function consultarGdh() {
 
 async function hacerReporte(text) {
   const reply = await handleReporte(text);
-  if (!reply) return { handled: false }; // sin cerebro Claude o falló → silencio
+  if (!reply) return { handled: false };
   return { handled: true, reply };
+}
+
+async function registrarEspiritual(e, raw) {
+  if (!e || !e.content || !e.content.trim()) return { handled: false };
+  const kind = ['gratitud', 'reflexion', 'oracion', 'lectura'].includes(e.kind) ? e.kind : 'gratitud';
+  const { error } = await miraiSupabase.from('spiritual').insert({
+    kind, content: e.content.trim(), source: 'voz', raw_text: raw,
+  });
+  if (error) { console.error('[neura] espiritual insert:', error.message); return { handled: true, reply: 'Uy, no pude guardarlo ahora. ¿Me lo repites?' }; }
+  const emo = kind === 'gratitud' ? '🙏' : kind === 'oracion' ? '✝️' : kind === 'lectura' ? '📖' : '🌱';
+  const label = kind === 'gratitud' ? 'Gratitud' : kind === 'oracion' ? 'Oración' : kind === 'lectura' ? 'Lectura' : 'Reflexión';
+  return { handled: true, reply: `${emo} ${label} guardada.\nLa ves en Neura → Espíritu ✦` };
 }
 
 async function reflexionar(text) {
   const reply = await handleReflexion(text);
-  if (!reply) return { handled: false }; // sin cerebro Claude o falló → cae al silencio de siempre
+  if (!reply) return { handled: false };
   return { handled: true, reply };
 }
