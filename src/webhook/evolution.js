@@ -26,6 +26,7 @@ import { createLeadAuto } from '../services/mia/patients.js';
 import { nombreValido } from '../services/mia/text.js';
 import { detectarHorarioYAvisar } from '../services/mia/horarioDetector.js';
 import { handleNeuraInstruction } from '../services/mia/neuraAssistant.js';
+import { sendVoiceReply } from '../services/mia/voice.js';
 
 export async function handleWebhook(req, res) {
   const payload = req.body;
@@ -123,6 +124,9 @@ async function processMessage(data) {
           if (res?.handled) {
             console.log(`[neura] instrucción de Mirai atendida: "${instruction.slice(0, 80)}"`);
             await dispatchMessages([{ channel: 'private', text: res.reply }], { senderJid: remoteJid });
+            if (res.speak && config.mia.assistant?.voiceReplies) {
+              sendVoiceReply(res.reply).catch((e) => console.error('[neura/voice]', e.message));
+            }
             return;
           }
         } catch (err) {

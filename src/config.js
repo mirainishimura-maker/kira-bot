@@ -132,6 +132,9 @@ export const config = {
       // NEURA_ASSISTANT_ENABLED=true. Sin el flag, cero cambios de comportamiento.
       assistant: {
         enabled: process.env.NEURA_ASSISTANT_ENABLED === 'true',
+        // Mia responde también por nota de voz en las respuestas conversacionales
+        // (reflexión, resumen de plata, recap GDH). Apagar con NEURA_VOICE_REPLIES=false.
+        voiceReplies: process.env.NEURA_VOICE_REPLIES !== 'false',
       },
       // Cerebro Claude (Anthropic) — Fase 2 de Neura (recap de GDH, reportes,
       // reflexión). Sin la key, esas features degradan y avisan.

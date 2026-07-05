@@ -271,7 +271,7 @@ async function consultarDeudas() {
 async function consultarFinanzas() {
   try {
     const texto = await buildResumenFinanzas({ period: 'semana' });
-    return { handled: true, reply: texto };
+    return { handled: true, reply: texto, speak: true };
   } catch (e) {
     console.error('[neura] finanzas:', e.message);
     return { handled: true, reply: 'No pude armar tu resumen de finanzas ahora ✦' };
@@ -282,7 +282,7 @@ async function consultarGdh() {
   try {
     const r = await runGdhRecap({ dry: true });
     if (!r.ok) return { handled: true, reply: 'No pude leer el grupo GDH ahora mismo ✦' };
-    return { handled: true, reply: r.texto };
+    return { handled: true, reply: r.texto, speak: true };
   } catch (e) {
     console.error('[neura] gdh:', e.message);
     return { handled: true, reply: 'No pude armar el recap del GDH ahora ✦' };
@@ -310,5 +310,5 @@ async function registrarEspiritual(e, raw) {
 async function reflexionar(text) {
   const reply = await handleReflexion(text);
   if (!reply) return { handled: false };
-  return { handled: true, reply };
+  return { handled: true, reply, speak: true };
 }

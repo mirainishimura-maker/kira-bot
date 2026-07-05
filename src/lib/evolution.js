@@ -60,6 +60,15 @@ export function sendDocument(jid, url, fileName, caption = '') {
   });
 }
 
+// Envía una NOTA DE VOZ (PTT). `audio` = base64 o URL pública. Evolution
+// transcodifica al formato de WhatsApp (ogg/opus) con ffmpeg.
+export function sendWhatsAppAudio(jid, audio) {
+  return call(`/message/sendWhatsAppAudio/${instance}`, 'POST', {
+    number: jid,
+    audio,
+  });
+}
+
 // Descarga el media (audio/imagen/video) de un mensaje en formato base64.
 // Recibe el "message" completo tal como vino en el webhook (con key + message).
 // Devuelve { base64, mimetype, fileName } o null si falla.
