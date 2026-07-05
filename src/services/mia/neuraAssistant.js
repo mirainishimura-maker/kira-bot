@@ -19,7 +19,7 @@
 
 import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
-import { listUpcomingAppointments, slotLabel } from './calendar.js';
+import { listUpcomingAppointments, slotLabel, createHold, rescheduleAppointment, cancelAppointment, getUpcoming, isCalendarEnabled } from './calendar.js';
 import { runGdhRecap } from './gdhRecap.js';
 import { handleReflexion } from './reflexion.js';
 import { handleReporte } from './reporte.js';
@@ -32,12 +32,17 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "espiritual" | "reflexion" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "espiritual" | "reflexion" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
   "pago": { "patient_name": string, "amount": number, "method": string | null } | null,
   "cargo": { "patient_name": string, "amount": number | null, "sessions": number | null, "concept": string | null } | null,
+  "cita": { "patient_name": string, "start_iso": string | null, "new_start_iso": string | null } | null,
+  "consulta_paciente": { "patient_name": string, "aspecto": "sesion" | "saldo" | "cita" | "todo" } | null,
+  "nota": { "content": string, "topic": string | null } | null,
+  "busqueda_nota": { "query": string } | null,
+  "animo": { "mood": string, "score": number | null, "note": string | null } | null,
   "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
   "completar": { "title": string } | null
 }
@@ -63,6 +68,13 @@ Reglas:
 - CARGO / DEUDA DE PACIENTE (lo que un paciente DEBE, NO lo que pagó): "X me debe 105 / cóbrale a X / X quedó debiendo / ponle una sesión pendiente a X / X tiene 2 sesiones sin pagar" → registrar_cargo. cargo.patient_name = nombre. cargo.amount = soles si lo dice, si no null. cargo.sessions = número de sesiones si lo menciona (o null). cargo.concept = breve (o null). (Ojo: "me pagó / me abonó" es registrar_pago, no cargo.)
 - CONSULTAR DEUDAS: "quién me debe / quiénes están debiendo / saldos / cuánto me deben / quién tiene pendiente de pago" → consultar_deudas.
 - CONSULTAR FINANZAS: "en qué se me fue la plata / resumen de mis finanzas / cuánto gasté esta semana / mis gastos / cómo voy de plata" → consultar_finanzas.
+- AGENDAR CITA: "agéndame a X el <día/hora> / ponle cita a X / resérvale a X / cítala a X ..." → agendar_cita. cita.patient_name = nombre del paciente; cita.start_iso = ISO con offset Lima -05:00 calculado desde el día/hora que da.
+- REPROGRAMAR CITA: "cambia/mueve/reprograma la cita de X al <día/hora>" → reprogramar_cita. cita.patient_name; cita.new_start_iso = ISO -05:00.
+- CANCELAR CITA: "cancela/anula la cita de X" → cancelar_cita. cita.patient_name.
+- CONSULTAR PACIENTE: "qué trabajé/vi con X / cómo va X / cuánto me debe X / cuándo veo a X / cuándo es la cita de X" → consultar_paciente. consulta_paciente.patient_name; aspecto = "sesion" | "saldo" | "cita" | "todo".
+- GUARDAR NOTA: "apunta que / anota que / recuerda que <DATO> / guarda que / agrega X a la lista de Y" (un DATO o ítem SIN hora ni acción por hacer; NO es recordatorio) → guardar_nota. nota.content = el dato tal cual; nota.topic = tema en 1-2 palabras (ej "wifi", "lista de compras").
+- CONSULTAR NOTA: "qué anoté de X / cuál era el X / qué tengo en la lista de Y / dime el dato de X" → consultar_nota. busqueda_nota.query = a qué se refiere (pocas palabras).
+- CHECK-IN DE ÁNIMO: "hoy me siento X / estoy X / me siento <emoción> / ando <estado>" (Mirai DECLARA su estado emocional, no pide consejo) → registrar_animo. animo.mood = la emoción en 1-2 palabras; animo.score = 1 (muy mal) a 5 (muy bien) si se infiere, si no null; animo.note = detalle si lo da. (Si PIDE perspectiva o ayuda a decidir → reflexion, no animo.)
 - ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
   espiritual.content = el contenido en breve, tal como lo dice.
 - REFLEXIÓN (que Neura RESPONDA pensando con ella): si Mirai reflexiona, plantea una duda o dilema ("¿debería ir o no?"), te pide tu opinión o una perspectiva, se desahoga, piensa en voz alta, o te hace una pregunta personal → reflexion. (Ojo: agradecer/orar es "espiritual", no "reflexion".)
@@ -90,7 +102,7 @@ const money = (n) => `S/ ${Number(Math.abs(n)).toFixed(2)}`;
 async function resolvePatient(name) {
   if (!name || !name.trim()) return { error: '¿De qué paciente? Dime el nombre 🙂' };
   const { data } = await miraiSupabase
-    .from('patients').select('id, nombre').ilike('nombre', `%${name.trim()}%`).limit(6);
+    .from('patients').select('id, nombre, phone').ilike('nombre', `%${name.trim()}%`).limit(6);
   const rows = data ?? [];
   if (rows.length === 0) return { error: `No encontré a "${name.trim()}" en tus pacientes. ¿Está escrito igual que en Neura?` };
   if (rows.length > 1) return { error: `Tengo varias que coinciden con "${name.trim()}": ${rows.map((r) => r.nombre).join(', ')}. ¿Cuál? (dime el nombre completo)` };
@@ -115,6 +127,13 @@ export async function handleNeuraInstruction(text) {
     case 'registrar_cargo':      return registrarCargo(parsed.cargo, text);
     case 'consultar_deudas':     return consultarDeudas();
     case 'consultar_finanzas':   return consultarFinanzas();
+    case 'agendar_cita':         return agendarCita(parsed.cita);
+    case 'reprogramar_cita':     return reprogramarCita(parsed.cita);
+    case 'cancelar_cita':        return cancelarCita(parsed.cita);
+    case 'consultar_paciente':   return consultarPaciente(parsed.consulta_paciente);
+    case 'guardar_nota':         return guardarNota(parsed.nota, text);
+    case 'consultar_nota':       return consultarNota(parsed.busqueda_nota);
+    case 'registrar_animo':      return registrarAnimo(parsed.animo, text);
     case 'consultar_gdh':        return consultarGdh();
     case 'reporte':              return hacerReporte(text);
     case 'reporte_pdf':          return enviarReportePdf();
@@ -276,6 +295,103 @@ async function consultarFinanzas() {
     console.error('[neura] finanzas:', e.message);
     return { handled: true, reply: 'No pude armar tu resumen de finanzas ahora ✦' };
   }
+}
+
+// ---- Citas: agendar / reprogramar / cancelar (Google Calendar vía Apps Script) ----
+async function agendarCita(c) {
+  if (!c || !c.patient_name) return { handled: false };
+  if (!isCalendarEnabled()) return { handled: true, reply: 'No tengo tu calendario conectado ahora mismo ✦' };
+  if (!c.start_iso) return { handled: true, reply: '¿Para cuándo? Dime el día y la hora 🙂' };
+  const { patient, error } = await resolvePatient(c.patient_name);
+  if (error) return { handled: true, reply: error };
+  if (!patient.phone) return { handled: true, reply: `No tengo el número de ${patient.nombre} para agendar. Agrégalo en su ficha y lo hacemos ✦` };
+  const r = await createHold({ phone: patient.phone, startISO: c.start_iso, nombre: patient.nombre, tentative: false });
+  if (!r.ok) return { handled: true, reply: `No pude agendar (${r.error || 'error'}). ¿Probamos otra hora?` };
+  return { handled: true, reply: `🗓️ Listo, agendé a ${patient.nombre} para ${r.etiqueta}.\nLo ves en Neura → Agenda ✦` };
+}
+
+async function reprogramarCita(c) {
+  if (!c || !c.patient_name) return { handled: false };
+  if (!isCalendarEnabled()) return { handled: true, reply: 'No tengo tu calendario conectado ahora mismo ✦' };
+  if (!c.new_start_iso) return { handled: true, reply: '¿Para cuándo la muevo? Dime el nuevo día y hora 🙂' };
+  const { patient, error } = await resolvePatient(c.patient_name);
+  if (error) return { handled: true, reply: error };
+  if (!patient.phone) return { handled: true, reply: `No tengo el número de ${patient.nombre} para mover su cita.` };
+  const r = await rescheduleAppointment({ phone: patient.phone, newStartISO: c.new_start_iso });
+  if (!r.ok) return { handled: true, reply: `No pude reprogramar (${r.error || 'no encontré su cita'}).` };
+  return { handled: true, reply: `🔁 Moví la cita de ${patient.nombre} a ${r.etiqueta} ✦` };
+}
+
+async function cancelarCita(c) {
+  if (!c || !c.patient_name) return { handled: false };
+  if (!isCalendarEnabled()) return { handled: true, reply: 'No tengo tu calendario conectado ahora mismo ✦' };
+  const { patient, error } = await resolvePatient(c.patient_name);
+  if (error) return { handled: true, reply: error };
+  if (!patient.phone) return { handled: true, reply: `No tengo el número de ${patient.nombre}.` };
+  const r = await cancelAppointment({ phone: patient.phone });
+  if (!r.ok) return { handled: true, reply: `No pude cancelar (${r.error || 'no encontré su cita'}).` };
+  return { handled: true, reply: `🚫 Cancelé la cita de ${patient.nombre}${r.etiqueta ? ` (${r.etiqueta})` : ''} ✦` };
+}
+
+async function consultarPaciente(cp) {
+  if (!cp || !cp.patient_name) return { handled: false };
+  const { patient, error } = await resolvePatient(cp.patient_name);
+  if (error) return { handled: true, reply: error };
+  const [sesRes, saldo, upc] = await Promise.all([
+    miraiSupabase.from('sessions').select('summary, homework, next_focus').eq('patient_id', patient.id).order('created_at', { ascending: false }).limit(1),
+    balancePaciente(patient.id),
+    patient.phone && isCalendarEnabled() ? getUpcoming({ phone: patient.phone }) : Promise.resolve({ hasAppointment: false }),
+  ]);
+  const partes = [`👤 *${patient.nombre}*`];
+  const s = sesRes.data?.[0];
+  if (s?.summary) {
+    partes.push(`*Última sesión:* ${s.summary}`);
+    if (s.homework) partes.push(`*Tarea:* ${s.homework}`);
+    if (s.next_focus) partes.push(`*Próximo foco:* ${s.next_focus}`);
+  } else {
+    partes.push('Aún sin notas de sesión.');
+  }
+  partes.push(`*Saldo:* ${saldo > 0.5 ? `debe ${money(saldo)}` : 'al día ✅'}`);
+  if (upc?.hasAppointment) partes.push(`*Próxima cita:* ${upc.etiqueta}`);
+  return { handled: true, reply: partes.join('\n') };
+}
+
+// ---- Notas (segundo cerebro) ----
+async function guardarNota(n, raw) {
+  if (!n || !n.content || !n.content.trim()) return { handled: false };
+  const { error } = await miraiSupabase.from('notes').insert({
+    content: n.content.trim(), topic: n.topic?.trim() || null, source: 'voz', raw_text: raw,
+  });
+  if (error) { console.error('[neura] nota insert:', error.message); return { handled: true, reply: 'Uy, no pude guardar la nota. ¿Me la repites?' }; }
+  return { handled: true, reply: `📝 Anotado${n.topic ? ` (${n.topic.trim()})` : ''}. Cuando quieras me lo pides de vuelta ✦` };
+}
+
+async function consultarNota(b) {
+  if (!b || !b.query) return { handled: false };
+  const q = b.query.replace(/[,()%]/g, ' ').trim();
+  if (!q) return { handled: false };
+  const { data } = await miraiSupabase.from('notes')
+    .select('content, topic').or(`content.ilike.%${q}%,topic.ilike.%${q}%`)
+    .order('created_at', { ascending: false }).limit(6);
+  const rows = data ?? [];
+  if (!rows.length) return { handled: true, reply: `No encontré nada anotado sobre "${q}" 🤔` };
+  const lines = rows.map((r) => `• ${r.content}`).join('\n');
+  return { handled: true, reply: `📒 Sobre "${q}":\n${lines}` };
+}
+
+// ---- Ánimo (check-in de bienestar) ----
+async function registrarAnimo(a, raw) {
+  if (!a || !a.mood || !a.mood.trim()) return { handled: false };
+  const score = Number.isFinite(Number(a.score)) ? Number(a.score) : null;
+  const { error } = await miraiSupabase.from('moods').insert({
+    mood: a.mood.trim(), score, note: a.note?.trim() || null, source: 'voz', raw_text: raw,
+  });
+  if (error) { console.error('[neura] animo insert:', error.message); return { handled: true, reply: 'Estoy contigo 💗 (no pude guardarlo, pero te leo).' }; }
+  const bajo = score != null && score <= 2;
+  const cierre = bajo
+    ? 'Gracias por contármelo. Si quieres, respira conmigo un momento… estoy aquí 💗'
+    : 'Anotado 💗 Qué lindo que te tomes el pulso a ti misma.';
+  return { handled: true, reply: `Registré cómo te sientes: *${a.mood.trim()}*.\n${cierre}`, speak: true };
 }
 
 async function consultarGdh() {
