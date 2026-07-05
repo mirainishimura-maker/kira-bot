@@ -30,12 +30,13 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "espiritual" | "reflexion" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "espiritual" | "reflexion" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
   "pago": { "patient_name": string, "amount": number, "method": string | null } | null,
-  "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null
+  "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
+  "completar": { "title": string } | null
 }
 
 Reglas:
@@ -48,6 +49,7 @@ Reglas:
 - RECORDATORIO: "recuérdame / acuérdame / anota que tengo que / no me dejes olvidar ..." → agregar_recordatorio.
   title = acción en pocas palabras. remind_at = ISO con offset Lima -05:00 calculado desde la hora que te doy, o null.
   recurrence = "daily" si "cada día/todos los días"; "weekly" si "cada semana"; si no, null.
+- COMPLETAR RECORDATORIO: "ya hice / ya tomé / ya está / marca como hecho / completé / ya terminé lo de ..." → completar_recordatorio. completar.title = a qué pendiente se refiere (pocas palabras).
 - NOTA DE SESIÓN: "terminé con X / la sesión con X estuvo / trabajé con X / con X vimos ..." → nota_sesion.
   sesion.patient_name = el nombre del paciente. sesion.summary = lo que trabajaron. sesion.homework = tarea que le dejó (o null).
   sesion.next_focus = qué ver la próxima (o null).
@@ -99,6 +101,7 @@ export async function handleNeuraInstruction(text) {
   switch (parsed?.intent) {
     case 'registrar_finanza':    return registrarFinanza(parsed.finanza, text);
     case 'agregar_recordatorio': return agregarRecordatorio(parsed.recordatorio, text);
+    case 'completar_recordatorio': return completarRecordatorio(parsed.completar);
     case 'consultar_agenda':     return consultarAgenda();
     case 'nota_sesion':          return notaSesion(parsed.sesion, text);
     case 'registrar_pago':       return registrarPago(parsed.pago, text);
@@ -144,6 +147,23 @@ async function agregarRecordatorio(r, raw) {
   const cuando = remindAt ? ` para ${slotLabel(remindAt)}` : '';
   const cada = recurrence === 'daily' ? ', cada día' : recurrence === 'weekly' ? ', cada semana' : '';
   return { handled: true, reply: `✅ Anotado: "${r.title.trim()}"${cuando}${cada}.\nLo ves en Neura → Agenda ✦` };
+}
+
+async function completarRecordatorio(c) {
+  if (!c || !c.title || !c.title.trim()) return { handled: false };
+  const { data } = await miraiSupabase
+    .from('reminders').select('id, title, recurrence')
+    .eq('status', 'pendiente').ilike('title', `%${c.title.trim()}%`).limit(5);
+  const rows = data ?? [];
+  if (rows.length === 0) return { handled: true, reply: `No encontré un pendiente que diga "${c.title.trim()}" 🤔` };
+  const target = rows[0];
+  if (target.recurrence) {
+    return { handled: true, reply: `👍 Listo, "${target.title}" hecho por hoy. Como es de cada día, sigue en tu lista para mañana 🙂` };
+  }
+  const { error } = await miraiSupabase.from('reminders')
+    .update({ status: 'hecho', done_at: new Date().toISOString() }).eq('id', target.id);
+  if (error) { console.error('[neura] completar:', error.message); return { handled: true, reply: 'Uy, no pude marcarlo. ¿Me lo repites?' }; }
+  return { handled: true, reply: `✅ Marqué "${target.title}" como hecho. ¡Bien ahí! 💪` };
 }
 
 async function consultarAgenda() {
