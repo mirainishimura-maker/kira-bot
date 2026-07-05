@@ -8,6 +8,7 @@
 //   · pago de un paciente           → tabla payments (saldos)
 //   · recap del grupo GDH           → Claude resume el grupo de trabajo (Fase 2)
 //   · reflexión / coaching          → Claude piensa CON ella (Fase 2)
+//   · reporte / informe             → Claude le redacta un reporte (Fase 2)
 // Escribe en el Supabase de Mirai (las MISMAS tablas que muestra el panel Neura).
 //
 // Se usa SOLO detrás del flag config.mia.assistant.enabled (NEURA_ASSISTANT_
@@ -20,6 +21,7 @@ import { miraiSupabase } from '../../lib/miraiSupabase.js';
 import { listUpcomingAppointments, slotLabel } from './calendar.js';
 import { runGdhRecap } from './gdhRecap.js';
 import { handleReflexion } from './reflexion.js';
+import { handleReporte } from './reporte.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -27,7 +29,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reflexion" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reflexion" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
@@ -49,6 +51,7 @@ Reglas:
   sesion.next_focus = qué ver la próxima (o null).
 - AGENDA: "qué tengo hoy / mi agenda / mis citas / qué sigue" → consultar_agenda.
 - GDH: "resúmeme el GDH / qué pasó en el grupo / recap del trabajo / qué se dijo en GDH / resumen del grupo" → consultar_gdh.
+- REPORTE: "hazme un reporte de / ármame un informe sobre / redáctame un reporte / necesito un informe de / prepárame un documento sobre ..." → reporte.
 - REFLEXIÓN: si Mirai reflexiona, plantea una duda o dilema ("¿debería ir o no?"), te pide tu opinión o una perspectiva, se desahoga, piensa en voz alta, o te hace una pregunta personal → reflexion.
 - Si es solo un "ok / gracias / jaja" o ruido sin intención, intent = "ninguno". Para lo demás que no calce en una acción concreta pero SÍ sea una reflexión, duda o desahogo, usa "reflexion".`;
 
@@ -96,6 +99,7 @@ export async function handleNeuraInstruction(text) {
     case 'nota_sesion':          return notaSesion(parsed.sesion, text);
     case 'registrar_pago':       return registrarPago(parsed.pago, text);
     case 'consultar_gdh':        return consultarGdh();
+    case 'reporte':              return hacerReporte(text);
     case 'reflexion':            return reflexionar(text);
     default: return { handled: false };
   }
@@ -187,6 +191,12 @@ async function consultarGdh() {
     console.error('[neura] gdh:', e.message);
     return { handled: true, reply: 'No pude armar el recap del GDH ahora ✦' };
   }
+}
+
+async function hacerReporte(text) {
+  const reply = await handleReporte(text);
+  if (!reply) return { handled: false }; // sin cerebro Claude o falló → silencio
+  return { handled: true, reply };
 }
 
 async function reflexionar(text) {
