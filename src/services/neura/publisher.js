@@ -185,6 +185,7 @@ export async function runNeuraSweep({ dry = false, prefer = null } = {}) {
     item.ig_media_id = mediaId;
     item.posted_at = new Date(now).toISOString();
     await saveState(state);
+    await writeNeuraStatus(state);
     console.log(`[neura] publicado "${item.id}" (${item.tipo}) → media ${mediaId} | quedan ${pendientes.length - 1}`);
 
     // Re-compartir la publicación recién hecha a una story (boost de alcance).
@@ -226,6 +227,36 @@ export async function runNeuraStory({ dry = false } = {}) {
   }
 }
 
+// ─── Status público para el panel Neura (sin token) ───────────────────
+// Escribe un resumen sanitizado de la cola/estado a `neura_status.json` en el
+// bucket PÚBLICO, para que el panel Neura lo lea sin credenciales ni token.
+async function writeNeuraStatus(stateArg) {
+  if (!miraiSupabase) return;
+  try {
+    const state = stateArg || await loadState();
+    const q = Array.isArray(state.queue) ? state.queue : [];
+    const pend = q.filter((p) => !p.posted);
+    const posted = q.filter((p) => p.posted);
+    const cap = (s) => (s || '').slice(0, 140);
+    const status = {
+      updated_at: new Date().toISOString(),
+      enabled: config.neura.enabled,
+      ig_user: '@neurapsi2026',
+      horas: config.neura.horas,
+      pendientes: pend.length,
+      publicados: posted.length,
+      stories_pendientes: Array.isArray(state.stories) ? state.stories.filter((s) => !s.posted).length : 0,
+      proximo: pend[0] ? { tipo: pend[0].tipo, caption: cap(pend[0].caption) } : null,
+      cola: pend.slice(0, 20).map((p) => ({ id: p.id, tipo: p.tipo, caption: cap(p.caption) })),
+      recientes: posted.slice(-10).reverse().map((p) => ({ tipo: p.tipo, caption: cap(p.caption), posted_at: p.posted_at, ig_media_id: p.ig_media_id })),
+    };
+    const buf = Buffer.from(JSON.stringify(status));
+    const { error } = await miraiSupabase.storage.from(config.neura.bucket)
+      .upload('neura_status.json', buf, { contentType: 'application/json', upsert: true, cacheControl: '60' });
+    if (error) console.error('[neura] writeNeuraStatus upload:', error.message);
+  } catch (e) { console.error('[neura] writeNeuraStatus:', e.message); }
+}
+
 // ─── Cron: publica en las horas configuradas (Lima) ───────────────────
 export function startNeuraCron() {
   if (!config.neura.enabled) {
@@ -245,6 +276,10 @@ export function startNeuraCron() {
   });
   console.log(`[neura] cron diario FIFO (vaciado backlog) | ${horas.join('h, ')}h (${tz})`);
 
+  // Status público para el panel Neura: al arrancar y cada hora (minuto 7).
+  writeNeuraStatus().catch(() => {});
+  cron.schedule('7 * * * *', () => { writeNeuraStatus().catch(() => {}); }, { timezone: tz });
+
   // Story "frase del día" (cola state.stories) en su propio horario. 0 = off.
   const sh = config.neura.storyHora;
   if (Number.isInteger(sh) && sh >= 1 && sh <= 23) {
@@ -258,4 +293,4 @@ export function startNeuraCron() {
 
 // Helpers exportados para el setup (subir imágenes + sembrar la cola) y para
 // publicar contenido puntual desde un script (reel, single o carrusel).
-export { loadState, saveState, publishReel, publishSingle, publishCarousel, publishStory };
+export { loadState, saveState, publishReel, publishSingle, publishCarousel, publishStory, writeNeuraStatus };
