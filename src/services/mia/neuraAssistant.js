@@ -4,6 +4,7 @@
 //   · registrar un gasto/ingreso   → tabla finances
 //   · agregar un recordatorio       → tabla reminders
 //   · consultar su agenda           → calendario (sesiones próximas)
+//   · bloquear su horario           → evento 🚫 BLOQUEO en Google Calendar (no disponible)
 //   · nota de sesión de un paciente → tabla sessions (continuidad clínica)
 //   · pago de un paciente           → tabla payments (saldos)
 //   · recap del grupo GDH           → Claude resume el grupo de trabajo (Fase 2)
@@ -19,7 +20,7 @@
 
 import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
-import { listUpcomingAppointments, slotLabel, createHold, rescheduleAppointment, cancelAppointment, getUpcoming, isCalendarEnabled } from './calendar.js';
+import { listUpcomingAppointments, slotLabel, createHold, rescheduleAppointment, cancelAppointment, getUpcoming, isCalendarEnabled, blockRange, listBlocks, unblockRange } from './calendar.js';
 import { runGdhRecap } from './gdhRecap.js';
 import { handleReflexion } from './reflexion.js';
 import { handleReporte } from './reporte.js';
@@ -32,13 +33,14 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
   "pago": { "patient_name": string, "amount": number, "method": string | null } | null,
   "cargo": { "patient_name": string, "amount": number | null, "sessions": number | null, "concept": string | null } | null,
   "cita": { "patient_name": string, "start_iso": string | null, "new_start_iso": string | null } | null,
+  "bloqueo": { "start_iso": string | null, "end_iso": string | null, "motivo": string | null } | null,
   "consulta_paciente": { "patient_name": string, "aspecto": "sesion" | "saldo" | "cita" | "todo" } | null,
   "nota": { "content": string, "topic": string | null } | null,
   "busqueda_nota": { "query": string } | null,
@@ -75,6 +77,11 @@ Reglas:
 - AGENDAR CITA: "agéndame a X el <día/hora> / ponle cita a X / resérvale a X / cítala a X ..." → agendar_cita. cita.patient_name = nombre del paciente; cita.start_iso = ISO con offset Lima -05:00 calculado desde el día/hora que da.
 - REPROGRAMAR CITA: "cambia/mueve/reprograma la cita de X al <día/hora>" → reprogramar_cita. cita.patient_name; cita.new_start_iso = ISO -05:00.
 - CANCELAR CITA: "cancela/anula la cita de X" → cancelar_cita. cita.patient_name.
+- BLOQUEAR AGENDA (Mirai se marca NO DISPONIBLE en SU horario — NO es un paciente, NO es un recordatorio): "bloquéame / bloquea mi agenda / bloquear horario / no estoy disponible / no me pongas citas / no ofrezcas turnos / tápame / ocúpame / márcame ocupada / cierra mi agenda / estaré fuera / de viaje / no atiendo el <día/hora>" → bloquear_agenda.
+  bloqueo.start_iso = ISO con offset Lima -05:00 (día + hora de inicio). bloqueo.end_iso = ISO -05:00 del fin SOLO si da un fin explícito o un rango ("de 5 a 6pm", "hasta el viernes", "de las 5 a las 7"); si no da fin, null. bloqueo.motivo = el motivo en breve, o null.
+  DIFERENCIA CLAVE: "recuérdame X" es agregar_recordatorio; "agéndame/cítala a X" con un PACIENTE es agendar_cita; bloquear_agenda es cuando Mirai tapa SU propio tiempo para que Mia NO ofrezca esos turnos.
+- QUITAR BLOQUEO: "quita/saca el bloqueo de <día/hora> / desbloquea <...> / vuelve a abrir mi agenda el <...> / ya estoy disponible el <...>" → desbloquear_agenda. bloqueo.start_iso / bloqueo.end_iso igual que en bloquear_agenda.
+- CONSULTAR BLOQUEOS: "qué tengo bloqueado / muéstrame mis bloqueos / cuándo no estoy disponible / mis bloqueos" → consultar_bloqueos.
 - CONSULTAR PACIENTE: "qué trabajé/vi con X / cómo va X / cuánto me debe X / cuándo veo a X / cuándo es la cita de X" → consultar_paciente. consulta_paciente.patient_name; aspecto = "sesion" | "saldo" | "cita" | "todo".
 - GUARDAR NOTA: "apunta que / anota que / recuerda que <DATO> / guarda que / agrega X a la lista de Y" (un DATO o ítem SIN hora ni acción por hacer; NO es recordatorio) → guardar_nota. nota.content = el dato tal cual; nota.topic = tema en 1-2 palabras (ej "wifi", "lista de compras").
 - CONSULTAR NOTA: "qué anoté de X / cuál era el X / qué tengo en la lista de Y / dime el dato de X" → consultar_nota. busqueda_nota.query = a qué se refiere (pocas palabras).
@@ -139,6 +146,9 @@ export async function handleNeuraInstruction(text) {
     case 'agendar_cita':         return agendarCita(parsed.cita);
     case 'reprogramar_cita':     return reprogramarCita(parsed.cita);
     case 'cancelar_cita':        return cancelarCita(parsed.cita);
+    case 'bloquear_agenda':      return bloquearAgenda(parsed.bloqueo);
+    case 'desbloquear_agenda':   return desbloquearAgenda(parsed.bloqueo);
+    case 'consultar_bloqueos':   return consultarBloqueos();
     case 'consultar_paciente':   return consultarPaciente(parsed.consulta_paciente);
     case 'guardar_nota':         return guardarNota(parsed.nota, text);
     case 'consultar_nota':       return consultarNota(parsed.busqueda_nota);
@@ -345,6 +355,54 @@ async function cancelarCita(c) {
   const r = await cancelAppointment({ phone: patient.phone });
   if (!r.ok) return { handled: true, reply: `No pude cancelar (${r.error || 'no encontré su cita'}).` };
   return { handled: true, reply: `🚫 Cancelé la cita de ${patient.nombre}${r.etiqueta ? ` (${r.etiqueta})` : ''} ✦` };
+}
+
+// ---- Bloqueos de agenda: Mirai se marca NO DISPONIBLE (Google Calendar vía Apps Script) ----
+// Igual que el comando /bloquear, pero por voz/texto natural. Sin fin explícito,
+// el bloqueo va de esa hora al fin del día (misma convención que /bloquear).
+function finDelDiaLima(startISO) {
+  const m = String(startISO || '').match(/^(\d{4}-\d{2}-\d{2})T/);
+  return m ? `${m[1]}T23:59:00-05:00` : null;
+}
+
+// Normaliza el rango: fin explícito válido, o fin del día del inicio. → { startISO, endISO } o null.
+function rangoBloqueo(b) {
+  const startISO = b?.start_iso;
+  if (!startISO) return null;
+  let endISO = b?.end_iso || null;
+  if (!endISO || new Date(endISO).getTime() <= new Date(startISO).getTime()) endISO = finDelDiaLima(startISO);
+  return endISO ? { startISO, endISO } : null;
+}
+
+async function bloquearAgenda(b) {
+  if (!isCalendarEnabled()) return { handled: true, reply: 'No tengo tu calendario conectado ahora mismo, así que no puedo bloquear el horario ✦' };
+  if (!b || !b.start_iso) return { handled: true, reply: '¿Qué horario te bloqueo? Dime el día y la hora, ej: "bloquéame el lunes 13 de 5 a 6pm" 🙂' };
+  const rango = rangoBloqueo(b);
+  if (!rango) return { handled: true, reply: '¿Hasta qué hora te bloqueo? Dime, por ejemplo "de 5 a 6pm" 🙂' };
+  const motivo = (b.motivo && b.motivo.trim()) || 'No disponible';
+  const r = await blockRange({ startISO: rango.startISO, endISO: rango.endISO, motivo });
+  if (!r.ok) return { handled: true, reply: `No pude bloquear tu agenda (${r.error || 'error'}). ¿Lo intentamos de nuevo?` };
+  return { handled: true, reply: `🚫 Bloqueé tu agenda:\n${r.inicio_label}\n   → ${r.fin_label}\nMotivo: ${r.motivo}.\nNo ofreceré esos turnos y ya quedó en tu Google Calendar ✦` };
+}
+
+async function desbloquearAgenda(b) {
+  if (!isCalendarEnabled()) return { handled: true, reply: 'No tengo tu calendario conectado ahora mismo ✦' };
+  if (!b || !b.start_iso) return { handled: true, reply: '¿Qué bloqueo quito? Dime el día/hora, ej: "quita el bloqueo del lunes 13 a las 5pm" 🙂' };
+  const rango = rangoBloqueo(b);
+  if (!rango) return { handled: true, reply: '¿De qué rango quito el bloqueo? 🙂' };
+  const r = await unblockRange({ startISO: rango.startISO, endISO: rango.endISO });
+  if (!r.ok) return { handled: true, reply: `No pude quitar el bloqueo (${r.error || 'error'}).` };
+  if (!r.deleted) return { handled: true, reply: 'No encontré un bloqueo en ese rango 🤔 (pídeme "muéstrame mis bloqueos" para verlos).' };
+  return { handled: true, reply: `✓ Quité ${r.deleted} bloqueo${r.deleted === 1 ? '' : 's'} de ese rango. Vuelvo a ofrecer esos turnos ✦` };
+}
+
+async function consultarBloqueos() {
+  if (!isCalendarEnabled()) return { handled: true, reply: 'No tengo tu calendario conectado ahora mismo ✦' };
+  const r = await listBlocks();
+  if (!r.ok) return { handled: true, reply: 'No pude leer tus bloqueos ahora mismo ✦' };
+  if (!r.blocks.length) return { handled: true, reply: '🗓️ No tienes bloqueos activos. Tu agenda está abierta según tu plantilla ✦' };
+  const lines = r.blocks.map((x) => `🚫 ${x.inicio_label} → ${x.fin_label}${x.motivo ? ` — ${x.motivo}` : ''}`).join('\n');
+  return { handled: true, reply: `Tus bloqueos activos (${r.blocks.length}):\n${lines}` };
 }
 
 async function consultarPaciente(cp) {
@@ -574,7 +632,7 @@ function ayudaMenu() {
 
 💰 *Plata* — "gasté 20 en el taxi" · "¿en qué se me fue la plata?"
 🩺 *Consultorio* — "terminé con Ana, trabajamos…" · "Ana me pagó 105" · "Ana me debe 105" · "¿quién me debe?" · "¿qué trabajé con Ana?" · "agéndame a Ana el martes 4pm"
-🗓️ *Tu día* — "¿qué tengo hoy?" · "recuérdame las pastillas a las 9" · "ya tomé las pastillas"
+🗓️ *Tu día* — "¿qué tengo hoy?" · "recuérdame las pastillas a las 9" · "ya tomé las pastillas" · "bloquéame el lunes de 5 a 6pm"
 🫂 *Tu gente* — "agrega a mi mamá" · "llamé a mi mamá"
 🫀 *Tú* — "tomé 2 litros de agua" · "dormí 6 horas" · "hoy me siento cansada" · "hoy agradezco por…"
 📝 *Recordar y pensar* — "apunta que el wifi es…" · "hazme un reporte de…" · "ayúdame a pensar si…"
