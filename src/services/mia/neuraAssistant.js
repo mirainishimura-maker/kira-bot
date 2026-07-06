@@ -304,7 +304,7 @@ async function consultarDeudas() {
 async function consultarFinanzas() {
   try {
     const texto = await buildResumenFinanzas({ period: 'semana' });
-    return { handled: true, reply: texto, speak: true };
+    return { handled: true, reply: texto, speak: isCalculo(texto) };
   } catch (e) {
     console.error('[neura] finanzas:', e.message);
     return { handled: true, reply: 'No pude armar tu resumen de finanzas ahora ✦' };
@@ -430,7 +430,7 @@ async function registrarAnimo(a, raw) {
   const cierre = bajo
     ? 'Gracias por contármelo. Si quieres, respira conmigo un momento… estoy aquí 💗'
     : 'Anotado 💗 Qué lindo que te tomes el pulso a ti misma.';
-  return { handled: true, reply: `Registré cómo te sientes: *${a.mood.trim()}*.\n${cierre}`, speak: true };
+  return { handled: true, reply: `Registré cómo te sientes: *${a.mood.trim()}*.\n${cierre}` };
 }
 
 // ---- Salud / hábitos / descanso (tabla life_log) ----
@@ -479,7 +479,7 @@ async function consultarGdh() {
   try {
     const r = await runGdhRecap({ dry: true });
     if (!r.ok) return { handled: true, reply: 'No pude leer el grupo GDH ahora mismo ✦' };
-    return { handled: true, reply: r.texto, speak: true };
+    return { handled: true, reply: r.texto };
   } catch (e) {
     console.error('[neura] gdh:', e.message);
     return { handled: true, reply: 'No pude armar el recap del GDH ahora ✦' };
@@ -504,10 +504,69 @@ async function registrarEspiritual(e, raw) {
   return { handled: true, reply: `${emo} ${label} guardada.\nLa ves en Neura → Espíritu ✦` };
 }
 
+// ¿La respuesta es un CÁLCULO matemático (cuentas/plata)? Solo esas van por audio.
+function isCalculo(text) {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  const numTokens = (t.match(/\d+/g) || []).length;
+  const señal = /(soles|s\/|total|suma|sumar|falta|faltan|debe|deben|saldo|cuenta|bloque|cuota|paga|pag[oó]|=|×)/.test(t);
+  return numTokens >= 2 && señal;
+}
+
+// Extrae del mensaje (aunque sea largo/desordenado) las transacciones EXPLÍCITAS
+// y las registra sola: pagos, cargos (saldos) y gastos. Devuelve qué guardó.
+async function extraerYRegistrarFinanzas(text) {
+  if (!/\d/.test(text)) return [];
+  let parsed;
+  try {
+    const resp = await miraiOpenai.chat.completions.create({
+      model: MIA_MODEL, temperature: 0, response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: `Extrae SOLO transacciones financieras EXPLÍCITAS y YA OCURRIDAS del mensaje de Mirai (psicóloga). Devuelve JSON:
+{"pagos":[{"patient_name":string,"amount":number}],"cargos":[{"patient_name":string,"amount":number}],"gastos":[{"amount":number,"category":string,"description":string}]}
+- pago = un paciente le PAGÓ/abonó N soles.
+- cargo = un paciente le DEBE / quedó debiendo N soles.
+- gasto = Mirai gastó/compró/pagó N soles (gasto personal).
+- patient_name = el nombre de la PACIENTE. Si dice "papá/mamá de X", la paciente es X.
+NO incluyas preguntas, hipótesis, precios que solo consulta, ni totales que solo comenta. Si no hay transacciones claras y ocurridas, deja todo vacío. Devuelve SOLO el JSON.` },
+        { role: 'user', content: text },
+      ],
+    });
+    parsed = JSON.parse(resp.choices?.[0]?.message?.content ?? '{}');
+  } catch { return []; }
+
+  const saved = [];
+  for (const p of parsed.pagos ?? []) {
+    const amount = Number(p.amount);
+    if (!p?.patient_name || !Number.isFinite(amount) || amount <= 0) continue;
+    const { patient } = await resolvePatient(p.patient_name);
+    if (!patient) continue;
+    const { error } = await miraiSupabase.from('payments').insert({ patient_id: patient.id, amount, currency: 'PEN', concept: 'sesión', source: 'voz', raw_text: text });
+    if (!error) saved.push(`💰 pago ${money(amount)} de ${patient.nombre}`);
+  }
+  for (const c of parsed.cargos ?? []) {
+    const amount = Number(c.amount);
+    if (!c?.patient_name || !Number.isFinite(amount) || amount <= 0) continue;
+    const { patient } = await resolvePatient(c.patient_name);
+    if (!patient) continue;
+    const { error } = await miraiSupabase.from('charges').insert({ patient_id: patient.id, amount, currency: 'PEN', concept: 'sesión', source: 'voz', raw_text: text });
+    if (!error) saved.push(`🧾 ${patient.nombre} debe ${money(amount)}`);
+  }
+  for (const g of parsed.gastos ?? []) {
+    const amount = Number(g.amount);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const { error } = await miraiSupabase.from('finances').insert({ direction: 'gasto', amount, currency: 'PEN', category: g.category || 'Otros', description: g.description || null, source: 'voz', raw_text: text });
+    if (!error) saved.push(`💸 gasto ${money(amount)}`);
+  }
+  return saved;
+}
+
 async function reflexionar(text) {
-  const reply = await handleReflexion(text);
+  const [reply, saved] = await Promise.all([handleReflexion(text), extraerYRegistrarFinanzas(text)]);
   if (!reply) return { handled: false };
-  return { handled: true, reply, speak: true };
+  let full = reply;
+  if (saved.length) full += `\n\n💾 Guardé: ${saved.join(' · ')}.\nSi algo no va, lo editas en Pacientes ✦`;
+  return { handled: true, reply: full, speak: isCalculo(full) };
 }
 
 function ayudaMenu() {
