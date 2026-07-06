@@ -6,7 +6,7 @@
 import cron from 'node-cron';
 import { config } from '../../config.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
-import { listUpcomingAppointments, isCalendarEnabled } from './calendar.js';
+import { listUpcomingAppointments, listBlocks, isCalendarEnabled } from './calendar.js';
 
 async function nameForPhone(phone) {
   const digits = (phone || '').replace(/\D/g, '');
@@ -29,11 +29,26 @@ export async function runAgendaSync() {
     const nombre = await nameForPhone(a.phone);
     rows.push({
       start_iso: a.inicio_iso,
+      end_iso: a.fin_iso || null,
       title: nombre ? `Sesión · ${nombre}` : 'Sesión',
       kind: 'sesion',
       phone: a.phone,
     });
   }
+
+  // Bloqueos (🚫 no disponible) → también al panel, para verlos en la agenda.
+  try {
+    const b = await listBlocks();
+    if (b.ok) for (const x of b.blocks) {
+      rows.push({
+        start_iso: x.inicio_iso,
+        end_iso: x.fin_iso || null,
+        title: x.motivo || 'No disponible',
+        kind: 'bloqueo',
+        phone: null,
+      });
+    }
+  } catch (e) { console.error('[neura/agenda] bloqueos:', e.message); }
 
   // Reemplaza el snapshot completo (delete-all + insert).
   await miraiSupabase.from('agenda_cache').delete().gte('start_iso', '1970-01-01T00:00:00Z');

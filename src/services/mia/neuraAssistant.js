@@ -38,7 +38,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -49,6 +49,7 @@ Formato exacto:
   "cargo": { "patient_name": string, "amount": number | null, "sessions": number | null, "concept": string | null } | null,
   "cita": { "patient_name": string, "start_iso": string | null, "new_start_iso": string | null } | null,
   "bloqueo": { "start_iso": string | null, "end_iso": string | null, "motivo": string | null } | null,
+  "posponer": { "title": string | null, "remind_at": string | null } | null,
   "consulta_paciente": { "patient_name": string, "aspecto": "sesion" | "saldo" | "cita" | "todo" } | null,
   "nota": { "content": string, "topic": string | null } | null,
   "busqueda_nota": { "query": string } | null,
@@ -75,7 +76,9 @@ Reglas:
 - NOTA DE SESIÓN: "terminé con X / la sesión con X estuvo / trabajé con X / con X vimos ..." → nota_sesion.
   sesion.patient_name = el nombre del paciente. sesion.summary = lo que trabajaron. sesion.homework = tarea que le dejó (o null).
   sesion.next_focus = qué ver la próxima (o null).
-- AGENDA: "qué tengo hoy / mi agenda / mis citas / qué sigue" → consultar_agenda.
+- AGENDA (HOY / próximo): "qué tengo hoy / mi agenda / mis citas / qué sigue / qué tengo ahora" → consultar_agenda.
+- AGENDA DE LA SEMANA: "qué tengo esta semana / cómo viene la semana / mi semana / qué se viene / agenda de la semana / qué tengo estos días" → consultar_semana.
+- POSPONER RECORDATORIO (mover un pendiente que ya existe a otra hora): "posponlo / muévelo / cámbialo para / mejor recuérdame eso <cuándo> / pásalo para mañana / recuérdame eso mejor a las ..." → posponer_recordatorio. posponer.title = a qué pendiente se refiere (o null si dice "eso/lo último"); posponer.remind_at = NUEVO ISO con offset Lima -05:00. (Ojo: si es un pendiente NUEVO, es agregar_recordatorio; posponer es mover uno existente.)
 - GDH: "resúmeme el GDH / qué pasó en el grupo / recap del trabajo / qué se dijo en GDH / resumen del grupo" → consultar_gdh.
 - REPORTE: "hazme un reporte de / ármame un informe sobre / redáctame un reporte / necesito un informe de / prepárame un documento sobre ..." → reporte.
 - REPORTE PDF: "mándalo en PDF / pásalo a PDF / hazme el documento / quiero el reporte en PDF / mándame el documento / en PDF ..." (se refiere al reporte que se acaba de armar) → reporte_pdf.
@@ -178,6 +181,8 @@ export async function handleNeuraInstruction(text) {
     case 'bloquear_agenda':      return bloquearAgenda(parsed.bloqueo);
     case 'desbloquear_agenda':   return desbloquearAgenda(parsed.bloqueo);
     case 'consultar_bloqueos':   return consultarBloqueos();
+    case 'consultar_semana':     return consultarSemana();
+    case 'posponer_recordatorio': return posponerRecordatorio(parsed.posponer);
     case 'consultar_paciente':   return consultarPaciente(parsed.consulta_paciente);
     case 'guardar_nota':         return guardarNota(parsed.nota, text);
     case 'consultar_nota':       return consultarNota(parsed.busqueda_nota);
@@ -263,6 +268,59 @@ async function consultarAgenda() {
   if (!r.appointments.length) return { handled: true, reply: '🗓️ No tienes sesiones agendadas en las próximas 24h ✦' };
   const lines = r.appointments.map((a) => `• ${a.etiqueta}`).join('\n');
   return { handled: true, reply: `🗓️ Tus próximas sesiones:\n${lines}` };
+}
+
+// Vista de los próximos 7 días: citas + bloqueos, ordenados por fecha/hora.
+async function consultarSemana() {
+  const r = await listUpcomingAppointments({ hoursAhead: 168 });
+  if (!r.ok) return { handled: true, reply: 'No pude leer tu agenda ahora mismo ✦' };
+  const limite = Date.now() + 7 * 86400000;
+  const items = r.appointments.map((a) => ({ iso: a.inicio_iso, texto: `🌿 ${a.etiqueta}` }));
+  if (isCalendarEnabled()) {
+    try {
+      const b = await listBlocks();
+      if (b.ok) for (const x of b.blocks) {
+        if (new Date(x.inicio_iso).getTime() <= limite) {
+          items.push({ iso: x.inicio_iso, texto: `🚫 ${x.inicio_label} — ${x.motivo || 'No disponible'}` });
+        }
+      }
+    } catch (e) { console.error('[neura] semana bloqueos:', e.message); }
+  }
+  if (!items.length) return { handled: true, reply: '🗓️ Tu semana está libre — sin citas ni bloqueos en los próximos 7 días ✦' };
+  items.sort((a, b) => new Date(a.iso) - new Date(b.iso));
+  const lines = items.slice(0, 20).map((i) => `• ${i.texto}`).join('\n');
+  return { handled: true, reply: `🗓️ *Tu semana:*\n${lines}` };
+}
+
+// Busca un pendiente pendiente por título tolerando relleno ("lo de las …").
+// Sin título → el más reciente. Con título → limpia stopwords y, si no calza,
+// reintenta con la palabra más larga (la clave, ej. "pastillas").
+const STOP_TITULO = new Set(['lo', 'de', 'la', 'las', 'el', 'los', 'mi', 'mis', 'eso', 'esa', 'ese', 'cosa', 'del', 'un', 'una', 'que', 'a']);
+async function buscarPendiente(rawTitle) {
+  const base = () => miraiSupabase.from('reminders').select('id, title').eq('status', 'pendiente').order('created_at', { ascending: false });
+  if (!rawTitle) { const { data } = await base().limit(5); return data ?? []; }
+  const words = rawTitle.toLowerCase().split(/\s+/).filter((w) => w && !STOP_TITULO.has(w));
+  const clean = words.join(' ') || rawTitle;
+  let { data } = await base().ilike('title', `%${clean}%`).limit(5);
+  if ((!data || !data.length) && words.length) {
+    const longest = words.slice().sort((a, b) => b.length - a.length)[0];
+    ({ data } = await base().ilike('title', `%${longest}%`).limit(5));
+  }
+  return data ?? [];
+}
+
+// Mueve un pendiente EXISTENTE a otra fecha/hora (posponer).
+async function posponerRecordatorio(p) {
+  const nuevo = p?.remind_at || null;
+  if (!nuevo) return { handled: true, reply: '¿Para cuándo lo muevo? Dime el nuevo día y hora 🙂' };
+  const rows = await buscarPendiente((p?.title || '').trim());
+  if (!rows.length) {
+    return { handled: true, reply: p?.title ? `No encontré un pendiente que diga "${p.title.trim()}" 🤔` : 'No tienes pendientes para posponer 🙂' };
+  }
+  const target = rows[0];
+  const { error } = await miraiSupabase.from('reminders').update({ remind_at: nuevo, due_at: nuevo }).eq('id', target.id);
+  if (error) { console.error('[neura] posponer:', error.message); return { handled: true, reply: 'Uy, no pude moverlo. ¿Me lo repites?' }; }
+  return { handled: true, reply: `🔁 Listo, moví "${target.title}" para ${slotLabel(nuevo)}.\nLo ves en Neura → Agenda ✦` };
 }
 
 async function notaSesion(s, raw) {
@@ -669,7 +727,7 @@ function ayudaMenu() {
 
 💰 *Plata* — "gasté 20 con el BBVA" · "¿cuánto tengo en el BCP?" · "le aboné 100 a César" · "¿a quién le debo?" · "mete 50 a mi meta de Georgia" · "¿cómo van mis metas?" · "¿en qué se me fue la plata?"
 🩺 *Consultorio* — "terminé con Ana, trabajamos…" · "Ana me pagó 105" · "Ana me debe 105" · "¿quién me debe?" · "¿qué trabajé con Ana?" · "agéndame a Ana el martes 4pm"
-🗓️ *Tu día* — "¿qué tengo hoy?" · "recuérdame las pastillas a las 9" · "ya tomé las pastillas" · "bloquéame el lunes de 5 a 6pm"
+🗓️ *Tu día* — "¿qué tengo hoy?" · "¿qué tengo esta semana?" · "recuérdame las pastillas a las 9" · "posponlo a mañana" · "ya tomé las pastillas" · "bloquéame el lunes de 5 a 6pm"
 🫂 *Tu gente* — "agrega a mi mamá" · "llamé a mi mamá"
 🫀 *Tú* — "tomé 2 litros de agua" · "dormí 6 horas" · "hoy me siento cansada" · "hoy agradezco por…"
 📝 *Recordar y pensar* — "apunta que el wifi es…" · "hazme un reporte de…" · "ayúdame a pensar si…"
