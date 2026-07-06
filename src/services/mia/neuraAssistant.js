@@ -26,6 +26,11 @@ import { handleReflexion } from './reflexion.js';
 import { handleReporte } from './reporte.js';
 import { enviarReportePdf } from './reportePdf.js';
 import { buildResumenFinanzas } from './resumenFinanzas.js';
+import {
+  resolveAccount, handleConsultarSaldo, handleAjustarSaldo,
+  handleRegistrarDeuda, handleAbonarDeuda, handleConsultarDeudaPersonal,
+  handleCrearMeta, handleAportarMeta, handleConsultarMetas,
+} from './finanzas.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -33,8 +38,11 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
-  "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string } | null,
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
+  "saldo": { "account": string | null, "amount": number | null } | null,
+  "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
+  "meta": { "name": string, "target": number | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
   "pago": { "patient_name": string, "amount": number, "method": string | null } | null,
@@ -74,6 +82,19 @@ Reglas:
 - CARGO / DEUDA DE PACIENTE (lo que un paciente DEBE, NO lo que pagó): "X me debe 105 / cóbrale a X / X quedó debiendo / ponle una sesión pendiente a X / X tiene 2 sesiones sin pagar" → registrar_cargo. cargo.patient_name = nombre. cargo.amount = soles si lo dice, si no null. cargo.sessions = número de sesiones si lo menciona (o null). cargo.concept = breve (o null). (Ojo: "me pagó / me abonó" es registrar_pago, no cargo.)
 - CONSULTAR DEUDAS: "quién me debe / quiénes están debiendo / saldos / cuánto me deben / quién tiene pendiente de pago" → consultar_deudas.
 - CONSULTAR FINANZAS: "en qué se me fue la plata / resumen de mis finanzas / cuánto gasté esta semana / mis gastos / cómo voy de plata" → consultar_finanzas.
+- MOVIMIENTO CON CUENTA: en registrar_finanza, si menciona una cuenta o medio ("con el BBVA / del BCP / en efectivo / con Yape / con la tarjeta Saga / con el crédito Yape"), pon finanza.account = el nombre de la cuenta (BCP, BBVA, Yape, Efectivo, Saga Falabella, Crédito Yape). Si no la menciona, account = null.
+- CONSULTAR SALDO: "cuánto tengo en el BBVA / cuánto hay en el BCP / cuánto tengo en total / mis cuentas / cuánta plata tengo" → consultar_saldo. saldo.account = la cuenta, o null si pregunta por el total/todas.
+- AJUSTAR SALDO (DECLARA cuánto hay en una cuenta, no es un gasto/ingreso): "tengo 50 en el BBVA / mi saldo del BCP es 6 / pon el efectivo en 20 / en el Yape tengo 100" → ajustar_saldo. saldo.account = cuenta; saldo.amount = el monto.
+- REGISTRAR DEUDA/PRÉSTAMO PERSONAL (NO un paciente): "le debo 500 a César / César me prestó 500 / le presté 200 a mi hermano / me prestaron 1000" → registrar_deuda. deuda.counterparty = la persona; deuda.amount = monto; deuda.currency = "USD" si son dólares, si no "PEN".
+  deuda.direction — LEE CON CUIDADO quién le prestó a quién:
+    · "debo" = MIRAI DEBE (le prestaron a ELLA): "me prestó", "me prestaron", "le debo a X", "quedé debiéndole a X", "X me hizo un préstamo".
+    · "me_deben" = a MIRAI le deben (ELLA prestó): "le presté a X", "presté plata a X", "X me debe porque le presté", "me tienen que devolver".
+  (Ojo: un PACIENTE que debe por sesiones es registrar_cargo, no registrar_deuda.)
+- ABONAR/PAGAR DEUDA: "le aboné 100 a César / le pagué 50 a Julio / me devolvió 30 mi hermano / aboné a la deuda de X" → abonar_deuda. deuda.counterparty; deuda.amount; deuda.direction si se distingue.
+- CONSULTAR DEUDA PERSONAL: "cuánto le debo a César / a quién le debo / cuánto debo / cuánto me deben de lo que presté / mis préstamos / mis deudas" → consultar_deuda_personal. deuda.counterparty = persona si la nombra, si no null. (Ojo: "quién me debe" de PACIENTES es consultar_deudas.)
+- CREAR META DE AHORRO: "quiero ahorrar 5000 para Georgia / meta para SERUMS / nueva meta viaje a X (necesito 3000)" → crear_meta. meta.name = nombre de la meta; meta.target = monto objetivo si lo da (o null); meta.currency.
+- APORTAR A META: "ahorré 100 para Georgia / mete 50 a la meta de SERUMS / guardé 200 para el viaje / aporté 80 al fondo de emergencia" → aportar_meta. meta.name = a qué meta; meta.amount = cuánto aporta.
+- CONSULTAR METAS: "cómo van mis metas / cuánto llevo para Georgia / cuánto me falta para X / mis metas de ahorro" → consultar_metas.
 - AGENDAR CITA: "agéndame a X el <día/hora> / ponle cita a X / resérvale a X / cítala a X ..." → agendar_cita. cita.patient_name = nombre del paciente; cita.start_iso = ISO con offset Lima -05:00 calculado desde el día/hora que da.
 - REPROGRAMAR CITA: "cambia/mueve/reprograma la cita de X al <día/hora>" → reprogramar_cita. cita.patient_name; cita.new_start_iso = ISO -05:00.
 - CANCELAR CITA: "cancela/anula la cita de X" → cancelar_cita. cita.patient_name.
@@ -143,6 +164,14 @@ export async function handleNeuraInstruction(text) {
     case 'registrar_cargo':      return registrarCargo(parsed.cargo, text);
     case 'consultar_deudas':     return consultarDeudas();
     case 'consultar_finanzas':   return consultarFinanzas();
+    case 'consultar_saldo':      return handleConsultarSaldo(parsed.saldo);
+    case 'ajustar_saldo':        return handleAjustarSaldo(parsed.saldo);
+    case 'registrar_deuda':      return handleRegistrarDeuda(parsed.deuda, text);
+    case 'abonar_deuda':         return handleAbonarDeuda(parsed.deuda, text);
+    case 'consultar_deuda_personal': return handleConsultarDeudaPersonal(parsed.deuda);
+    case 'crear_meta':           return handleCrearMeta(parsed.meta, text);
+    case 'aportar_meta':         return handleAportarMeta(parsed.meta, text);
+    case 'consultar_metas':      return handleConsultarMetas();
     case 'agendar_cita':         return agendarCita(parsed.cita);
     case 'reprogramar_cita':     return reprogramarCita(parsed.cita);
     case 'cancelar_cita':        return cancelarCita(parsed.cita);
@@ -175,16 +204,24 @@ async function registrarFinanza(f, raw) {
   }
   const direction = f.direction === 'ingreso' ? 'ingreso' : 'gasto';
   const category = (f.category || 'Otros').trim();
+  // Cuenta opcional ("...con el BBVA / en efectivo"): la ligamos si la reconocemos.
+  let accountId = null, accountName = null;
+  if (f.account && f.account.trim()) {
+    const r = await resolveAccount(f.account);
+    if (r.account) { accountId = r.account.id; accountName = r.account.name; }
+  }
   const { error } = await miraiSupabase.from('finances').insert({
     direction, amount, currency: 'PEN',
     category, description: f.description?.trim() || null,
+    account_id: accountId,
     source: 'voz', raw_text: raw,
   });
   if (error) { console.error('[neura] finanza insert:', error.message); return { handled: true, reply: 'Uy, no pude anotarlo ahora. ¿Me lo repites?' }; }
   const emoji = direction === 'ingreso' ? '💰' : '💸';
   const verbo = direction === 'ingreso' ? 'Ingreso' : 'Gasto';
   const desc = f.description ? ` (${f.description.trim()})` : '';
-  return { handled: true, reply: `${emoji} ${verbo} anotado: ${money(amount)} · ${category}${desc}.\nLo ves en Neura → Finanzas ✦` };
+  const cuenta = accountName ? ` · ${accountName}` : '';
+  return { handled: true, reply: `${emoji} ${verbo} anotado: ${money(amount)} · ${category}${desc}${cuenta}.\nLo ves en Neura → Finanzas ✦` };
 }
 
 async function agregarRecordatorio(r, raw) {
@@ -630,7 +667,7 @@ async function reflexionar(text) {
 function ayudaMenu() {
   const txt = `🌿 *Soy Mia, tu asistente.* Háblame normal (texto o audio) y yo me encargo:
 
-💰 *Plata* — "gasté 20 en el taxi" · "¿en qué se me fue la plata?"
+💰 *Plata* — "gasté 20 con el BBVA" · "¿cuánto tengo en el BCP?" · "le aboné 100 a César" · "¿a quién le debo?" · "mete 50 a mi meta de Georgia" · "¿cómo van mis metas?" · "¿en qué se me fue la plata?"
 🩺 *Consultorio* — "terminé con Ana, trabajamos…" · "Ana me pagó 105" · "Ana me debe 105" · "¿quién me debe?" · "¿qué trabajé con Ana?" · "agéndame a Ana el martes 4pm"
 🗓️ *Tu día* — "¿qué tengo hoy?" · "recuérdame las pastillas a las 9" · "ya tomé las pastillas" · "bloquéame el lunes de 5 a 6pm"
 🫂 *Tu gente* — "agrega a mi mamá" · "llamé a mi mamá"
