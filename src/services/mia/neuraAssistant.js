@@ -38,7 +38,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -51,6 +51,7 @@ Formato exacto:
   "bloqueo": { "start_iso": string | null, "end_iso": string | null, "motivo": string | null } | null,
   "posponer": { "title": string | null, "remind_at": string | null } | null,
   "consulta_paciente": { "patient_name": string, "aspecto": "sesion" | "saldo" | "cita" | "todo" } | null,
+  "paquete": { "patient_name": string, "sessions": number | null } | null,
   "nota": { "content": string, "topic": string | null } | null,
   "busqueda_nota": { "query": string } | null,
   "buscar": { "query": string } | null,
@@ -107,6 +108,8 @@ Reglas:
 - QUITAR BLOQUEO: "quita/saca el bloqueo de <día/hora> / desbloquea <...> / vuelve a abrir mi agenda el <...> / ya estoy disponible el <...>" → desbloquear_agenda. bloqueo.start_iso / bloqueo.end_iso igual que en bloquear_agenda.
 - CONSULTAR BLOQUEOS: "qué tengo bloqueado / muéstrame mis bloqueos / cuándo no estoy disponible / mis bloqueos" → consultar_bloqueos.
 - CONSULTAR PACIENTE: "qué trabajé/vi con X / cómo va X / cuánto me debe X / cuándo veo a X / cuándo es la cita de X" → consultar_paciente. consulta_paciente.patient_name; aspecto = "sesion" | "saldo" | "cita" | "todo".
+- CREAR PAQUETE DE SESIONES: "X compró un paquete de 6 / véndele un paquete de 4 a X / arma un paquete de 6 sesiones para X / X se llevó el paquete de 4" → crear_paquete. paquete.patient_name = paciente; paquete.sessions = número de sesiones del paquete (4, 6, u otro; si no lo dice, null).
+- CONSULTAR PAQUETE: "cuántas sesiones le quedan a X / cómo va el paquete de X / le quedan sesiones a X / el paquete de X" → consultar_paquete. paquete.patient_name = paciente.
 - GUARDAR NOTA: "apunta que / anota que / recuerda que <DATO> / guarda que / agrega X a la lista de Y" (un DATO o ítem SIN hora ni acción por hacer; NO es recordatorio) → guardar_nota. nota.content = el dato tal cual; nota.topic = tema en 1-2 palabras (ej "wifi", "lista de compras").
 - CONSULTAR NOTA: "qué anoté de X / cuál era el X / qué tengo en la lista de Y / dime el dato de X" → consultar_nota. busqueda_nota.query = a qué se refiere (pocas palabras).
 - BUSCAR (global, en todo Neura): "busca X / búscame todo lo de X / encuentra Y / ¿dónde está Z? / qué tengo sobre W" → buscar. buscar.query = qué busca.
@@ -184,6 +187,8 @@ export async function handleNeuraInstruction(text) {
     case 'consultar_semana':     return consultarSemana();
     case 'posponer_recordatorio': return posponerRecordatorio(parsed.posponer);
     case 'consultar_paciente':   return consultarPaciente(parsed.consulta_paciente);
+    case 'crear_paquete':        return crearPaquete(parsed.paquete);
+    case 'consultar_paquete':    return consultarPaquete(parsed.paquete);
     case 'guardar_nota':         return guardarNota(parsed.nota, text);
     case 'consultar_nota':       return consultarNota(parsed.busqueda_nota);
     case 'buscar':               return buscarGlobal(parsed.buscar);
@@ -337,7 +342,64 @@ async function notaSesion(s, raw) {
   if (e) { console.error('[neura] sesion insert:', e.message); return { handled: true, reply: 'Uy, no pude guardar la nota. ¿Me la repites?' }; }
   const tarea = s.homework ? `\nTarea: ${s.homework.trim()}` : '';
   const prox = s.next_focus ? `\nPróxima: ${s.next_focus.trim()}` : '';
-  return { handled: true, reply: `📝 Nota de sesión guardada para ${patient.nombre}.${tarea}${prox}\nLa ves en Neura → Pacientes ✦` };
+  const paqLinea = await descontarPaquete(patient.id); // si tiene paquete activo, descuenta 1
+  return { handled: true, reply: `📝 Nota de sesión guardada para ${patient.nombre}.${tarea}${prox}${paqLinea}\nLa ves en Neura → Pacientes ✦` };
+}
+
+// ---- Paquetes de sesiones (4/6 a S/105 c/u) ----
+const PRECIO_SESION = 105;
+
+async function paqueteActivo(patientId) {
+  const { data } = await miraiSupabase
+    .from('packages').select('*').eq('patient_id', patientId).eq('status', 'activo')
+    .order('purchased_at', { ascending: false }).limit(1);
+  return data?.[0] || null;
+}
+
+// Descuenta una sesión del paquete activo (si hay). Devuelve una línea para el
+// mensaje ("🎟️ Le quedan X del paquete") o '' si no tiene paquete.
+async function descontarPaquete(patientId) {
+  const paq = await paqueteActivo(patientId);
+  if (!paq) return '';
+  const used = Number(paq.used_sessions || 0) + 1;
+  const total = Number(paq.total_sessions || 0);
+  const patch = { used_sessions: used };
+  if (used >= total) patch.status = 'completado';
+  await miraiSupabase.from('packages').update(patch).eq('id', paq.id);
+  const quedan = Math.max(0, total - used);
+  return quedan > 0
+    ? `\n🎟️ Le quedan ${quedan} de ${total} del paquete.`
+    : `\n🎟️ Con esta se completó el paquete de ${total} sesiones.`;
+}
+
+async function crearPaquete(p) {
+  if (!p || !p.patient_name) return { handled: false };
+  const { patient, error } = await resolvePatient(p.patient_name);
+  if (error) return { handled: true, reply: error };
+  let total = Number(p.sessions);
+  if (!Number.isFinite(total) || total <= 0) total = 4;
+  const price = total * PRECIO_SESION;
+  const { error: e } = await miraiSupabase.from('packages').insert({
+    patient_id: patient.id, total_sessions: total, used_sessions: 0, price, status: 'activo',
+  });
+  if (e) { console.error('[neura] paquete insert:', e.message); return { handled: true, reply: 'Uy, no pude crear el paquete. ¿Me lo repites?' }; }
+  // El paquete implica un cargo por su precio (se paga en una o varias cuotas).
+  await miraiSupabase.from('charges').insert({
+    patient_id: patient.id, amount: price, currency: 'PEN', concept: `paquete ${total} sesiones`, source: 'voz', raw_text: `paquete ${total}`,
+  });
+  return { handled: true, reply: `🎟️ Paquete de *${total} sesiones* para ${patient.nombre} · ${money(price)}.\nLe registré el cargo (págalo en cuotas si quiere). Cada sesión que anotes va descontando ✦` };
+}
+
+async function consultarPaquete(p) {
+  if (!p || !p.patient_name) return { handled: false };
+  const { patient, error } = await resolvePatient(p.patient_name);
+  if (error) return { handled: true, reply: error };
+  const paq = await paqueteActivo(patient.id);
+  if (!paq) return { handled: true, reply: `${patient.nombre} no tiene un paquete activo ahora mismo. Puedes crearle uno: "${patient.nombre} compró un paquete de 6" 🙂` };
+  const total = Number(paq.total_sessions || 0);
+  const used = Number(paq.used_sessions || 0);
+  const quedan = Math.max(0, total - used);
+  return { handled: true, reply: `🎟️ *${patient.nombre}* — paquete de ${total} sesiones.\nUsadas: ${used} · *Quedan: ${quedan}* ✦` };
 }
 
 async function registrarPago(p, raw) {
@@ -726,7 +788,7 @@ function ayudaMenu() {
   const txt = `🌿 *Soy Mia, tu asistente.* Háblame normal (texto o audio) y yo me encargo:
 
 💰 *Plata* — "gasté 20 con el BBVA" · "¿cuánto tengo en el BCP?" · "le aboné 100 a César" · "¿a quién le debo?" · "mete 50 a mi meta de Georgia" · "¿cómo van mis metas?" · "¿en qué se me fue la plata?"
-🩺 *Consultorio* — "terminé con Ana, trabajamos…" · "Ana me pagó 105" · "Ana me debe 105" · "¿quién me debe?" · "¿qué trabajé con Ana?" · "agéndame a Ana el martes 4pm"
+🩺 *Consultorio* — "terminé con Ana, trabajamos…" · "Ana me pagó 105" · "Ana compró un paquete de 6" · "¿cuántas sesiones le quedan a Ana?" · "¿quién me debe?" · "¿qué trabajé con Ana?" · "agéndame a Ana el martes 4pm"
 🗓️ *Tu día* — "¿qué tengo hoy?" · "¿qué tengo esta semana?" · "recuérdame las pastillas a las 9" · "posponlo a mañana" · "ya tomé las pastillas" · "bloquéame el lunes de 5 a 6pm"
 🫂 *Tu gente* — "agrega a mi mamá" · "llamé a mi mamá"
 🫀 *Tú* — "tomé 2 litros de agua" · "dormí 6 horas" · "hoy me siento cansada" · "hoy agradezco por…"
