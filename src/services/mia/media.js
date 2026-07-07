@@ -102,6 +102,52 @@ export async function analizarImagenParaMia({ base64, mimetype, caption = '' }) 
   return info.descripcion ? `${prefix}: ${info.descripcion}` : prefix;
 }
 
+// Analiza una foto que MIRAI le manda a Mia desde su número personal.
+// Clasifica en: 'pago' (Yape/Plin que un paciente le hizo A ELLA → extrae monto
+// + quién le pagó), 'escrito' (nota/devocional a mano → transcribe), u 'otro'.
+export async function analizarFotoMirai({ base64, mimetype = 'image/jpeg', caption = '' }) {
+  if (!miraiOpenai || !base64) return null;
+  const dataUrl = `data:${mimetype};base64,${base64}`;
+  const hint = caption ? `Mirai adjuntó el caption: "${caption}". ` : '';
+  const instruccion = `${hint}Eres la asistente de Mirai (psicóloga en Perú). ELLA te manda esta imagen desde su teléfono. Clasifícala y extrae lo pedido:
+(a) COMPROBANTE DE PAGO (Yape/Plin/transferencia/depósito) que un paciente le hizo A ELLA → extrae el monto en soles y el NOMBRE DE QUIEN LE PAGÓ (el emisor/pagador, NO Mirai).
+(b) TEXTO ESCRITO A MANO (devocional, reflexión, página de diario, apunte) → TRANSCRIBE el texto completo tal cual, respetando saltos de línea.
+(c) OTRA COSA.
+Responde SOLO con JSON:
+{
+  "tipo": "pago" | "escrito" | "otro",
+  "descripcion": "una oración breve de qué es",
+  "pago": { "monto_pen": <número o null>, "pagador": <nombre de quien le pagó o null>, "metodo": "yape"|"plin"|"transferencia"|"efectivo"|null } | null,
+  "texto": <transcripción completa del texto a mano, o null>
+}`;
+  try {
+    const result = await miraiOpenai.chat.completions.create({
+      model: MIA_MODEL,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: instruccion },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      }],
+      max_tokens: 900,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+    });
+    const p = JSON.parse(result.choices?.[0]?.message?.content ?? '{}');
+    const tipo = ['pago', 'escrito', 'otro'].includes(p.tipo) ? p.tipo : 'otro';
+    return {
+      tipo,
+      descripcion: String(p.descripcion ?? '').trim(),
+      pago: (p.pago && typeof p.pago === 'object') ? p.pago : null,
+      texto: p.texto ? String(p.texto).trim() : null,
+    };
+  } catch (err) {
+    console.error('[mia/media] analizarFotoMirai error:', err.status ?? '', err.message);
+    return null;
+  }
+}
+
 function mimetypeToExt(m) {
   if (!m) return 'ogg';
   if (m.includes('ogg'))  return 'ogg';

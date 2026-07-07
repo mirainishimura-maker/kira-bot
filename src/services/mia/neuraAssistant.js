@@ -20,6 +20,8 @@
 
 import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
+import { config } from '../../config.js';
+import { analizarFotoMirai } from './media.js';
 import { listUpcomingAppointments, slotLabel, createHold, rescheduleAppointment, cancelAppointment, getUpcoming, isCalendarEnabled, blockRange, listBlocks, unblockRange } from './calendar.js';
 import { runGdhRecap } from './gdhRecap.js';
 import { handleReflexion } from './reflexion.js';
@@ -228,6 +230,71 @@ export async function handleNeuraInstruction(text) {
     case 'ayuda':                return ayudaMenu();
     default: return { handled: false };
   }
+}
+
+// ---- Fotos que Mirai le manda a Mia (visión): Yape → pago; escrito → diario ----
+export async function handleNeuraImage(media) {
+  if (!miraiOpenai || !miraiSupabase || !media?.base64) return { handled: false };
+  const info = await analizarFotoMirai(media);
+  if (!info) return { handled: true, reply: 'Uy, no pude leer bien la imagen. ¿Me la reenvías más nítida? 🙂' };
+  if (info.tipo === 'pago' && info.pago) return pagoDesdeFoto(info.pago);
+  if (info.tipo === 'escrito' && info.texto) return escritoDesdeFoto(info, media);
+  return {
+    handled: true,
+    reply: info.descripcion
+      ? `Vi tu imagen (${info.descripcion}). ¿Qué hago con ella? Puedo leer un Yape para registrar el pago, o transcribir algo escrito ✦`
+      : '¿Qué hago con esta imagen? Puedo registrar un Yape o transcribir una nota escrita 🙂',
+  };
+}
+
+async function pagoDesdeFoto(pago) {
+  const monto = Number(pago.monto_pen);
+  if (!Number.isFinite(monto) || monto <= 0) return { handled: true, reply: 'Vi un comprobante pero no pude leer bien el monto. ¿De cuánto fue? 🙂' };
+  const metodo = ['yape', 'plin', 'transferencia', 'efectivo'].includes(pago.metodo) ? pago.metodo : null;
+  const nombre = (pago.pagador || '').trim();
+  if (nombre) {
+    const { patient } = await resolvePatient(nombre);
+    if (patient) {
+      const { error } = await miraiSupabase.from('payments').insert({
+        patient_id: patient.id, amount: monto, currency: 'PEN', method: metodo,
+        concept: 'sesión', verified: true, source: 'auto-comprobante',
+      });
+      if (!error) {
+        const saldo = await balancePaciente(patient.id);
+        const saldoLine = saldo > 0.5 ? `\nAún debe: *${money(saldo)}*.` : '\n¡Al día! ✅';
+        return { handled: true, reply: `💰 Leí el Yape: *${money(monto)}* de ${patient.nombre}${metodo ? ` (${metodo})` : ''}.${saldoLine}\nLo ves en Neura → Pacientes ✦` };
+      }
+    }
+  }
+  // No identifiqué a la paciente por la foto → lo anoto como ingreso y le doy el camino.
+  await miraiSupabase.from('finances').insert({
+    direction: 'ingreso', amount: monto, currency: 'PEN', category: 'Consulta',
+    description: nombre ? `Pago de ${nombre} (foto)` : 'Pago recibido (foto)', source: 'auto', raw_text: 'yape foto',
+  });
+  return { handled: true, reply: `💰 Leí un pago de *${money(monto)}*${nombre ? ` de ${nombre}` : ''} y lo anoté como ingreso.\nSi es de una paciente y quieres enlazarlo a su ficha, dime "${nombre || 'Ana'} me pagó ${monto}" 🙂` };
+}
+
+async function escritoDesdeFoto(info, media) {
+  const texto = info.texto.trim();
+  // Guarda la foto (best-effort) en el bucket privado + la transcripción al diario.
+  let fotoPath = null;
+  try {
+    const buf = Buffer.from(media.base64, 'base64');
+    const ext = (media.mimetype || '').includes('png') ? 'png' : 'jpg';
+    fotoPath = `diario/${Date.now()}.${ext}`;
+    const { error: upErr } = await miraiSupabase.storage.from(config.neura.stateBucket)
+      .upload(fotoPath, buf, { contentType: media.mimetype || 'image/jpeg', upsert: true });
+    if (upErr) { fotoPath = null; console.error('[neura] foto upload:', upErr.message); }
+  } catch (e) { console.error('[neura] foto buffer:', e.message); fotoPath = null; }
+  const { error } = await miraiSupabase.from('journal').insert({
+    content: texto, source: 'foto', raw_text: fotoPath ? `foto:${fotoPath}` : null,
+  });
+  if (error) {
+    console.error('[neura] escrito insert:', error.message);
+    return { handled: true, reply: `📔 Lo transcribí:\n\n"${texto.slice(0, 400)}"\n\n(pero no pude guardarlo, ¿lo reintento?)` };
+  }
+  const preview = texto.length > 300 ? texto.slice(0, 300) + '…' : texto;
+  return { handled: true, reply: `📔 Transcribí y guardé en tu diario${fotoPath ? ' (con la foto)' : ''}:\n\n"${preview}"\n\nLo ves en Neura → Bienestar → Diario ✦` };
 }
 
 async function registrarFinanza(f, raw) {

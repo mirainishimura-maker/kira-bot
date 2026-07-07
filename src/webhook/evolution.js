@@ -25,7 +25,7 @@ import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/
 import { createLeadAuto } from '../services/mia/patients.js';
 import { nombreValido } from '../services/mia/text.js';
 import { detectarHorarioYAvisar } from '../services/mia/horarioDetector.js';
-import { handleNeuraInstruction } from '../services/mia/neuraAssistant.js';
+import { handleNeuraInstruction, handleNeuraImage } from '../services/mia/neuraAssistant.js';
 import { sendVoiceReply } from '../services/mia/voice.js';
 
 export async function handleWebhook(req, res) {
@@ -108,14 +108,27 @@ async function processMessage(data) {
   if (channel === CHANNEL_PRIVATE && config.mia.enabled && config.mia.assistant?.enabled) {
     const miraiPhone = phoneFromJid(remoteJid);
     if (miraiPhone === config.mia.personalPhone) {
+      const clase = classifyMessage(data);
+      // IMAGEN de Mirai: Yape → registra el pago; escrito a mano → transcribe y guarda.
+      // (Aunque venga con caption; el caption se usa como pista para la visión.)
+      if (clase.kind === 'image') {
+        const media = await fetchMessageMediaBase64(data);
+        if (media?.base64) {
+          try {
+            const resImg = await handleNeuraImage({ base64: media.base64, mimetype: media.mimetype, caption: clase.caption });
+            if (resImg?.handled) {
+              console.log('[neura] imagen de Mirai atendida');
+              await dispatchMessages([{ channel: 'private', text: resImg.reply }], { senderJid: remoteJid });
+              return;
+            }
+          } catch (err) { console.error('[neura] error en imagen:', err.message); }
+        }
+      }
       let instruction = text;
-      if (!instruction) {
-        const c = classifyMessage(data);
-        if (c.kind === 'audio') {
-          const media = await fetchMessageMediaBase64(data);
-          if (media?.base64) {
-            instruction = await transcribeAudio({ base64: media.base64, mimetype: media.mimetype });
-          }
+      if (!instruction && clase.kind === 'audio') {
+        const media = await fetchMessageMediaBase64(data);
+        if (media?.base64) {
+          instruction = await transcribeAudio({ base64: media.base64, mimetype: media.mimetype });
         }
       }
       if (instruction && !isMiaCommand(instruction) && !detectLeadNote(instruction)) {
