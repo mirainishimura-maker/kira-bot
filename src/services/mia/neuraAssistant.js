@@ -31,6 +31,7 @@ import {
   handleRegistrarDeuda, handleAbonarDeuda, handleConsultarDeudaPersonal,
   handleCrearMeta, handleAportarMeta, handleConsultarMetas,
 } from './finanzas.js';
+import { handleRegistrarTrabajo, handleConsultarTrabajo, handleReporteGdh } from './trabajo.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -38,7 +39,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -52,6 +53,7 @@ Formato exacto:
   "posponer": { "title": string | null, "remind_at": string | null } | null,
   "consulta_paciente": { "patient_name": string, "aspecto": "sesion" | "saldo" | "cita" | "todo" } | null,
   "paquete": { "patient_name": string, "sessions": number | null } | null,
+  "trabajo": { "kind": "logro" | "pendiente" | "tarea" | "ahorro" | "venta" | "nota", "content": string, "impact": number | null } | null,
   "nota": { "content": string, "topic": string | null } | null,
   "busqueda_nota": { "query": string } | null,
   "buscar": { "query": string } | null,
@@ -80,7 +82,11 @@ Reglas:
 - AGENDA (HOY / próximo): "qué tengo hoy / mi agenda / mis citas / qué sigue / qué tengo ahora" → consultar_agenda.
 - AGENDA DE LA SEMANA: "qué tengo esta semana / cómo viene la semana / mi semana / qué se viene / agenda de la semana / qué tengo estos días" → consultar_semana.
 - POSPONER RECORDATORIO (mover un pendiente que ya existe a otra hora): "posponlo / muévelo / cámbialo para / mejor recuérdame eso <cuándo> / pásalo para mañana / recuérdame eso mejor a las ..." → posponer_recordatorio. posponer.title = a qué pendiente se refiere (o null si dice "eso/lo último"); posponer.remind_at = NUEVO ISO con offset Lima -05:00. (Ojo: si es un pendiente NUEVO, es agregar_recordatorio; posponer es mover uno existente.)
-- GDH: "resúmeme el GDH / qué pasó en el grupo / recap del trabajo / qué se dijo en GDH / resumen del grupo" → consultar_gdh.
+- GDH GRUPO (recap del CHAT del grupo de trabajo): "resúmeme el GDH / qué pasó en el grupo / qué se dijo en GDH / resumen del grupo / recap del grupo" → consultar_gdh.
+- REGISTRAR TRABAJO/GDH (Mirai anota algo de SU trabajo en GDH/Ítaca — REQUIERE contexto de trabajo: "de GDH / del trabajo / en GDH / en Ítaca / para gerencia"): "apunta un logro de GDH: … / logro del trabajo … / conseguí/logré … / bajé/reduje X de A a B / ahorré N en GDH / cerré una venta de N / pendiente de GDH … / tarea del trabajo …" → registrar_trabajo.
+  trabajo.kind: "logro" (algo que logró), "ahorro" (bajó un costo o ahorró plata), "venta" (una venta/ingreso conseguido), "pendiente" (algo por hacer), "tarea" (tarea concreta), "nota" (un dato). trabajo.content = qué, en breve, INCLUYENDO los números tal como los dice. trabajo.impact = el monto en soles del ahorro/venta si hay uno claro (o null). (Ojo: sin contexto de trabajo, "ahorré N" es una meta/finanza; "recuérdame X" es recordatorio.)
+- CONSULTAR TRABAJO: "qué logros tengo este mes / cómo va mi trabajo / mis pendientes de GDH / qué he hecho en GDH este mes" → consultar_trabajo.
+- REPORTE GDH (informe MENSUAL a gerencia, se arma desde la bitácora): "hazme el reporte de GDH / arma mi reporte mensual / reporte para gerencia / informe para Brian / el reporte del mes de GDH" → reporte_gdh. (Ojo: "hazme un reporte de <otro tema que te dicto>" sin ser GDH/gerencia es reporte normal.)
 - REPORTE: "hazme un reporte de / ármame un informe sobre / redáctame un reporte / necesito un informe de / prepárame un documento sobre ..." → reporte.
 - REPORTE PDF: "mándalo en PDF / pásalo a PDF / hazme el documento / quiero el reporte en PDF / mándame el documento / en PDF ..." (se refiere al reporte que se acaba de armar) → reporte_pdf.
 - CARGO / DEUDA DE PACIENTE (lo que un paciente DEBE, NO lo que pagó): "X me debe 105 / cóbrale a X / X quedó debiendo / ponle una sesión pendiente a X / X tiene 2 sesiones sin pagar" → registrar_cargo. cargo.patient_name = nombre. cargo.amount = soles si lo dice, si no null. cargo.sessions = número de sesiones si lo menciona (o null). cargo.concept = breve (o null). (Ojo: "me pagó / me abonó" es registrar_pago, no cargo.)
@@ -197,6 +203,9 @@ export async function handleNeuraInstruction(text) {
     case 'agregar_persona':      return agregarPersona(parsed.persona, text);
     case 'contacto_persona':     return contactoPersona(parsed.contacto);
     case 'consultar_gdh':        return consultarGdh();
+    case 'registrar_trabajo':    return handleRegistrarTrabajo(parsed.trabajo, text);
+    case 'consultar_trabajo':    return handleConsultarTrabajo();
+    case 'reporte_gdh':          return handleReporteGdh();
     case 'reporte':              return hacerReporte(text);
     case 'reporte_pdf':          return enviarReportePdf();
     case 'espiritual':           return registrarEspiritual(parsed.espiritual, text);
@@ -792,6 +801,7 @@ function ayudaMenu() {
 🗓️ *Tu día* — "¿qué tengo hoy?" · "¿qué tengo esta semana?" · "recuérdame las pastillas a las 9" · "posponlo a mañana" · "ya tomé las pastillas" · "bloquéame el lunes de 5 a 6pm"
 🫂 *Tu gente* — "agrega a mi mamá" · "llamé a mi mamá"
 🫀 *Tú* — "tomé 2 litros de agua" · "dormí 6 horas" · "hoy me siento cansada" · "hoy agradezco por…"
+💼 *Trabajo (GDH)* — "apunta un logro: bajé AgendaPro de 540 a 100" · "¿cómo va mi trabajo?" · "hazme el reporte de GDH"
 📝 *Recordar y pensar* — "apunta que el wifi es…" · "hazme un reporte de…" · "ayúdame a pensar si…"
 
 Y si solo quieres conversar o pensar algo conmigo, también estoy aquí 💛`;

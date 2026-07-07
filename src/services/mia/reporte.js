@@ -46,6 +46,16 @@ export async function handleReporte(text) {
   return reply;
 }
 
+// Inyecta un reporte generado por otro módulo (ej. el reporte mensual de GDH)
+// para que "en PDF" (getLastReport) lo tome. Empuja user+assistant para no
+// romper la alternancia si luego Mirai dicta otro reporte.
+export function pushExternalReport(text) {
+  if (!text) return;
+  history.push({ role: 'user', content: '(reporte generado automáticamente)' });
+  history.push({ role: 'assistant', content: text });
+  while (history.length > MAX_MSGS) history.shift();
+}
+
 // Devuelve el último reporte redactado (para pasarlo a PDF), o null si no hay.
 export function getLastReport() {
   for (let i = history.length - 1; i >= 0; i--) {
