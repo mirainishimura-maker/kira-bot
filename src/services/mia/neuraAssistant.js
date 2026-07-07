@@ -39,7 +39,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -58,6 +58,7 @@ Formato exacto:
   "busqueda_nota": { "query": string } | null,
   "buscar": { "query": string } | null,
   "animo": { "mood": string, "score": number | null, "note": string | null } | null,
+  "diario": { "content": string } | null,
   "habito": { "kind": "agua" | "sueño" | "ejercicio" | "comida" | "descanso" | "disfrute" | "otro", "amount": number | null, "unit": string | null, "note": string | null } | null,
   "persona": { "name": string, "relation": string | null, "phone": string | null, "birthday": string | null } | null,
   "contacto": { "person": string } | null,
@@ -120,6 +121,9 @@ Reglas:
 - CONSULTAR NOTA: "qué anoté de X / cuál era el X / qué tengo en la lista de Y / dime el dato de X" → consultar_nota. busqueda_nota.query = a qué se refiere (pocas palabras).
 - BUSCAR (global, en todo Neura): "busca X / búscame todo lo de X / encuentra Y / ¿dónde está Z? / qué tengo sobre W" → buscar. buscar.query = qué busca.
 - CHECK-IN DE ÁNIMO: "hoy me siento X / estoy X / me siento <emoción> / ando <estado>" (Mirai DECLARA su estado emocional, no pide consejo) → registrar_animo. animo.mood = la emoción en 1-2 palabras; animo.score = 1 (muy mal) a 5 (muy bien) si se infiere, si no null; animo.note = detalle si lo da. (Si PIDE perspectiva o ayuda a decidir → reflexion, no animo.)
+- CONSULTAR ÁNIMO (pregunta por su TENDENCIA, no declara): "cómo ha estado mi ánimo / cómo va mi ánimo / cómo he estado de ánimo esta semana / mi ánimo del mes / cómo vengo emocionalmente" → consultar_animo.
+- ESCRIBIR DIARIO: "escribe en mi diario … / querido diario … / anota en mi diario … / en mi diario … / hoy en mi diario …" (una entrada personal, reflexiva, del día) → escribir_diario. diario.content = lo que quiere guardar, tal cual lo dice.
+- CONSULTAR DIARIO: "léeme mi diario / qué escribí en mi diario / mis entradas del diario / mi diario" → consultar_diario.
 - SALUD / HÁBITO / DESCANSO: "tomé X de agua / dormí X horas / hice ejercicio (X min) / comí ... / caminé / hoy descansé / vi una peli / salí a pasear / me di un gusto" → registrar_habito. habito.kind ∈ [agua, sueño, ejercicio, comida, descanso, disfrute, otro]; amount+unit si da cantidad (ej 2 "litros", 6 "horas", 30 "min"); note = detalle.
 - AGREGAR PERSONA: "agrega a mi mamá / registra a mi amiga X / anota a mi pareja Y (cumple el <fecha>, su número es ...)" → agregar_persona. persona.name = nombre; persona.relation = vínculo (mamá, pareja, amiga, hermano...); persona.phone si lo da; persona.birthday = ISO YYYY-MM-DD si la da.
 - CONTACTO YA HECHO (pasado): "llamé a mi mamá / hablé con X / le escribí a Y / vi a Z / almorcé con W" → contacto_persona. contacto.person = a quién. (Ojo: "recuérdame llamar a X" es recordatorio; "agrega a X" es agregar_persona.)
@@ -199,6 +203,9 @@ export async function handleNeuraInstruction(text) {
     case 'consultar_nota':       return consultarNota(parsed.busqueda_nota);
     case 'buscar':               return buscarGlobal(parsed.buscar);
     case 'registrar_animo':      return registrarAnimo(parsed.animo, text);
+    case 'consultar_animo':      return consultarAnimo();
+    case 'escribir_diario':      return escribirDiario(parsed.diario, text);
+    case 'consultar_diario':     return consultarDiario();
     case 'registrar_habito':     return registrarHabito(parsed.habito, text);
     case 'agregar_persona':      return agregarPersona(parsed.persona, text);
     case 'contacto_persona':     return contactoPersona(parsed.contacto);
@@ -657,6 +664,48 @@ async function registrarAnimo(a, raw) {
   return { handled: true, reply: `Registré cómo te sientes: *${a.mood.trim()}*.\n${cierre}` };
 }
 
+// Tendencia de ánimo de los últimos 30 días (promedio + recientes).
+async function consultarAnimo() {
+  const desde = new Date(Date.now() - 30 * 86400000).toISOString();
+  const { data } = await miraiSupabase.from('moods')
+    .select('mood, score, created_at').gte('created_at', desde).order('created_at', { ascending: false }).limit(60);
+  const rows = data ?? [];
+  if (!rows.length) return { handled: true, reply: 'Aún no tengo check-ins de ánimo tuyos este mes. Cuéntame cómo te sientes cuando quieras 💗' };
+  const conScore = rows.filter((r) => Number.isFinite(Number(r.score)));
+  let linea;
+  if (conScore.length) {
+    const avg = conScore.reduce((a, r) => a + Number(r.score), 0) / conScore.length;
+    const cara = avg >= 4 ? '🙂' : avg >= 3 ? '😌' : avg >= 2 ? '😔' : '💗';
+    linea = `Tu promedio es *${avg.toFixed(1)}/5* ${cara} (${conScore.length} check-ins).`;
+  } else {
+    linea = `Van ${rows.length} check-ins este mes.`;
+  }
+  const ultimos = rows.slice(0, 5).map((r) => r.mood).filter(Boolean);
+  const recientes = ultimos.length ? `\nÚltimos: ${ultimos.join(', ')}.` : '';
+  return { handled: true, reply: `💗 *Tu ánimo (últimos 30 días):*\n${linea}${recientes}\nEstoy aquí para lo que necesites 🤍` };
+}
+
+const fechaCortaLima = (d) => {
+  try { return new Date(`${d}T12:00:00-05:00`).toLocaleDateString('es-PE', { day: 'numeric', month: 'short' }); }
+  catch { return d; }
+};
+
+async function escribirDiario(d, raw) {
+  if (!d || !d.content || !d.content.trim()) return { handled: false };
+  const { error } = await miraiSupabase.from('journal').insert({ content: d.content.trim(), source: 'voz', raw_text: raw });
+  if (error) { console.error('[neura] diario insert:', error.message); return { handled: true, reply: 'Uy, no pude guardar tu diario. ¿Me lo repites?' }; }
+  return { handled: true, reply: `📔 Guardé tu entrada de diario.\nCuando quieras te la leo: "léeme mi diario" ✦` };
+}
+
+async function consultarDiario() {
+  const { data } = await miraiSupabase.from('journal')
+    .select('content, entry_date').order('entry_date', { ascending: false }).order('created_at', { ascending: false }).limit(4);
+  const rows = data ?? [];
+  if (!rows.length) return { handled: true, reply: 'Tu diario está en blanco por ahora. Dime "escribe en mi diario: ..." cuando quieras 🙂' };
+  const bloques = rows.map((r) => `📔 *${fechaCortaLima(r.entry_date)}*\n${r.content}`).join('\n\n');
+  return { handled: true, reply: `Tus últimas entradas:\n\n${bloques} ✦` };
+}
+
 // ---- Salud / hábitos / descanso (tabla life_log) ----
 async function registrarHabito(h, raw) {
   if (!h || !h.kind) return { handled: false };
@@ -800,7 +849,7 @@ function ayudaMenu() {
 🩺 *Consultorio* — "terminé con Ana, trabajamos…" · "Ana me pagó 105" · "Ana compró un paquete de 6" · "¿cuántas sesiones le quedan a Ana?" · "¿quién me debe?" · "¿qué trabajé con Ana?" · "agéndame a Ana el martes 4pm"
 🗓️ *Tu día* — "¿qué tengo hoy?" · "¿qué tengo esta semana?" · "recuérdame las pastillas a las 9" · "posponlo a mañana" · "ya tomé las pastillas" · "bloquéame el lunes de 5 a 6pm"
 🫂 *Tu gente* — "agrega a mi mamá" · "llamé a mi mamá"
-🫀 *Tú* — "tomé 2 litros de agua" · "dormí 6 horas" · "hoy me siento cansada" · "hoy agradezco por…"
+🫀 *Tú* — "tomé 2 litros de agua" · "dormí 6 horas" · "hoy me siento cansada" · "¿cómo va mi ánimo?" · "escribe en mi diario: hoy…" · "hoy agradezco por…"
 💼 *Trabajo (GDH)* — "apunta un logro: bajé AgendaPro de 540 a 100" · "¿cómo va mi trabajo?" · "hazme el reporte de GDH"
 📝 *Recordar y pensar* — "apunta que el wifi es…" · "hazme un reporte de…" · "ayúdame a pensar si…"
 
