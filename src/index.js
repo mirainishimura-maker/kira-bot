@@ -17,6 +17,7 @@ import { startResumenFinanzasCron, runResumenFinanzas } from './services/mia/res
 import { startSesionPrepCron, runSesionPrep } from './services/mia/sesionPrep.js';
 import { startAgendaSyncCron, runAgendaSync } from './services/mia/agendaSync.js';
 import { startGenteCron, runGenteCheck } from './services/mia/gente.js';
+import { startPagosCron, runPagosRecordatorio } from './services/mia/pagosFijos.js';
 import { runMetricas } from './services/mia/metricas.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 
@@ -265,6 +266,16 @@ app.post('/admin/agenda-sync', async (req, res) => {
   catch (err) { console.error('[admin/agenda-sync] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
 });
 
+// Recordatorio de pagos/suscripciones que vencen hoy/mañana (dry por defecto).
+app.post('/admin/pagos', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  const dry = req.query.send !== '1';
+  try { res.json(await runPagosRecordatorio({ dry })); }
+  catch (err) { console.error('[admin/pagos] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
+});
+
 // Cuidar tus vínculos (cumpleaños + con quién llevas rato sin hablar): dry por
 // defecto (muestra el texto); ?dry=false lo envía. Protegido por WEBHOOK_SECRET.
 app.post('/admin/gente', async (req, res) => {
@@ -298,6 +309,7 @@ app.listen(config.port, () => {
     startSesionPrepCron();
     startAgendaSyncCron();
     startGenteCron();
+    startPagosCron();
   }
   // NEURA (publicador de Instagram) — independiente de Mia, se auto-gatea.
   startNeuraCron();

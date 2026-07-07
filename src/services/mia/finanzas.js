@@ -186,6 +186,29 @@ async function goalSaved(goal) {
   return (data ?? []).reduce((a, x) => a + Number(x.amount || 0), 0);
 }
 
+// Meses (enteros, mínimo 1) desde hoy hasta la fecha objetivo; 0 si ya pasó.
+function mesesHasta(dateStr) {
+  if (!dateStr) return null;
+  const target = new Date(`${dateStr}T12:00:00-05:00`).getTime();
+  if (Number.isNaN(target)) return null;
+  const days = (target - Date.now()) / 86400000;
+  if (days <= 0) return 0;
+  return Math.max(1, Math.round(days / 30.44));
+}
+function fechaMes(dateStr) {
+  try { return new Date(`${dateStr}T12:00:00-05:00`).toLocaleDateString('es-PE', { month: 'long', year: 'numeric' }); }
+  catch { return dateStr; }
+}
+// Línea corta de plan para las listas (o '' si no aplica).
+function planCorta(goal, saved) {
+  if (!goal.target_amount) return '';
+  const falta = Math.max(0, Number(goal.target_amount) - saved);
+  if (falta <= 0.5 || !goal.target_date) return '';
+  const meses = mesesHasta(goal.target_date);
+  if (!meses) return '';
+  return `\n   📅 ${fmt(falta / meses, goal.currency)}/mes hasta ${fechaMes(goal.target_date)}`;
+}
+
 async function resolveGoal(name) {
   if (!clean(name)) return { error: '¿Cuál meta? Ej: "mete 50 a Georgia" 🙂', goal: null };
   const { data } = await miraiSupabase.from('goals').select('*').neq('status', 'lograda').ilike('name', `%${clean(name)}%`).limit(6);
@@ -199,14 +222,50 @@ export async function handleCrearMeta(m, raw) {
   const name = clean(m?.name);
   if (!name) return { handled: true, reply: '¿Cómo se llama la meta? Ej: "quiero ahorrar 5000 para Georgia" 🙂' };
   const target = Number(m?.target);
+  const tieneTarget = Number.isFinite(target) && target > 0;
   const currency = m?.currency === 'USD' ? 'USD' : 'PEN';
   const { error } = await miraiSupabase.from('goals').insert({
-    name, target_amount: Number.isFinite(target) && target > 0 ? target : null, currency,
+    name, target_amount: tieneTarget ? target : null, currency,
+    target_date: m?.target_date || null,
     note: raw ? `voz: ${raw}`.slice(0, 200) : null,
   });
   if (error) { console.error('[neura/fin] crear meta:', error.message); return { handled: true, reply: 'Uy, no pude crear la meta. ¿Me lo repites?' }; }
-  const meta = Number.isFinite(target) && target > 0 ? ` de ${fmt(target, currency)}` : '';
-  return { handled: true, reply: `🎯 Meta creada: *${name}*${meta}.\nCuando ahorres para esto, dime "mete X a ${name}" ✦` };
+  const metaTxt = tieneTarget ? ` de ${fmt(target, currency)}` : '';
+  // Si falta el costo o la fecha, la invitamos a completarlos para armar el plan.
+  if (!tieneTarget || !m?.target_date) {
+    const falta = !tieneTarget && !m?.target_date ? 'cuánto calculas que costará y para qué fecha'
+      : !tieneTarget ? 'cuánto calculas que costará' : 'para qué fecha la quieres';
+    return { handled: true, reply: `🎯 Meta creada: *${name}*${metaTxt}.\nDime ${falta} y te armo tu *plan de ahorro mensual* 🙂` };
+  }
+  const meses = mesesHasta(m.target_date);
+  const plan = meses ? `\n📅 Para *${fechaMes(m.target_date)}* (${meses} mes${meses === 1 ? '' : 'es'}): ahorra *${fmt(target / meses, currency)}/mes*.` : '';
+  return { handled: true, reply: `🎯 Meta creada: *${name}*${metaTxt}.${plan}\nCuando ahorres, dime "mete X a ${name}" ✦` };
+}
+
+// Plan de ahorro de UNA meta: cuánto guardar al mes para llegar al costo en la
+// fecha. Si en la pregunta trae costo/fecha nuevos, los guarda.
+export async function handleConsultarPlan(m) {
+  const { goal, error } = await resolveGoal(m?.name);
+  if (error) return { handled: true, reply: error };
+  if (!goal) return { handled: true, reply: `No tengo una meta que se llame "${clean(m?.name)}". Créala: "quiero ahorrar para ${clean(m?.name)}" 🙂` };
+  const patch = {};
+  const t = Number(m?.target);
+  if (Number.isFinite(t) && t > 0) patch.target_amount = t;
+  if (m?.target_date) patch.target_date = m.target_date;
+  if (Object.keys(patch).length) { await miraiSupabase.from('goals').update(patch).eq('id', goal.id); Object.assign(goal, patch); }
+
+  const saved = await goalSaved(goal);
+  if (!goal.target_amount) {
+    return { handled: true, reply: `Para armar tu plan de *${goal.name}* dime cuánto calculas que costará. Ej: "la meta de ${goal.name} es 12000" 🙂` };
+  }
+  const falta = Math.max(0, Number(goal.target_amount) - saved);
+  if (falta <= 0.5) return { handled: true, reply: `🎉 ¡Ya tienes lo de *${goal.name}* (${fmt(goal.target_amount, goal.currency)})! Meta cumplida.` };
+  if (!goal.target_date) {
+    return { handled: true, reply: `Tu meta *${goal.name}*: llevas ${fmt(saved, goal.currency)} de ${fmt(goal.target_amount, goal.currency)}, faltan ${fmt(falta, goal.currency)}.\n¿Para qué fecha la quieres? Dime el mes y año y te digo cuánto ahorrar al mes 🙂` };
+  }
+  const meses = mesesHasta(goal.target_date);
+  if (!meses) return { handled: true, reply: `La fecha de *${goal.name}* (${fechaMes(goal.target_date)}) ya llegó. Te faltan ${fmt(falta, goal.currency)} — ¿movemos la fecha?` };
+  return { handled: true, reply: `🎯 *Plan para ${goal.name}*\nCosto: ${fmt(goal.target_amount, goal.currency)} · llevas ${fmt(saved, goal.currency)} · faltan ${fmt(falta, goal.currency)}.\n📅 Para *${fechaMes(goal.target_date)}* (${meses} mes${meses === 1 ? '' : 'es'}): ahorra *${fmt(falta / meses, goal.currency)}/mes*.\nDime "mete X a ${goal.name}" cuando ahorres ✦` };
 }
 
 export async function handleAportarMeta(m, raw) {
@@ -242,7 +301,7 @@ export async function handleConsultarMetas() {
     if (g.target_amount) {
       const pct = Math.min(100, Math.round((ahorrado / Number(g.target_amount)) * 100));
       const falta = Math.max(0, Number(g.target_amount) - ahorrado);
-      lines.push(`${g.emoji || '🎯'} *${g.name}*: ${fmt(ahorrado, g.currency)} / ${fmt(g.target_amount, g.currency)} (${pct}%) · faltan ${fmt(falta, g.currency)}`);
+      lines.push(`${g.emoji || '🎯'} *${g.name}*: ${fmt(ahorrado, g.currency)} / ${fmt(g.target_amount, g.currency)} (${pct}%) · faltan ${fmt(falta, g.currency)}${planCorta(g, ahorrado)}`);
     } else {
       lines.push(`${g.emoji || '🎯'} *${g.name}*: ${fmt(ahorrado, g.currency)} ahorrado`);
     }

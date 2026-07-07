@@ -29,9 +29,10 @@ import { buildResumenFinanzas } from './resumenFinanzas.js';
 import {
   resolveAccount, handleConsultarSaldo, handleAjustarSaldo,
   handleRegistrarDeuda, handleAbonarDeuda, handleConsultarDeudaPersonal,
-  handleCrearMeta, handleAportarMeta, handleConsultarMetas,
+  handleCrearMeta, handleAportarMeta, handleConsultarMetas, handleConsultarPlan,
 } from './finanzas.js';
 import { handleRegistrarTrabajo, handleConsultarTrabajo, handleReporteGdh } from './trabajo.js';
+import { handleRegistrarPagoFijo, handleConsultarPagosFijos } from './pagosFijos.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -39,11 +40,12 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
-  "meta": { "name": string, "target": number | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
+  "meta": { "name": string, "target": number | null, "amount": number | null, "currency": "PEN" | "USD" | null, "target_date": string | null } | null,
+  "pagofijo": { "concept": string, "amount": number | null, "day": number | null, "category": "Suscripción" | "Tarjeta" | "Crédito" | "Servicio" | "Otro" | null } | null,
   "recordatorio": { "title": string, "remind_at": string | null, "recurrence": "daily" | "weekly" | null } | null,
   "sesion": { "patient_name": string, "summary": string, "homework": string | null, "next_focus": string | null } | null,
   "pago": { "patient_name": string, "amount": number, "method": string | null } | null,
@@ -103,9 +105,12 @@ Reglas:
   (Ojo: un PACIENTE que debe por sesiones es registrar_cargo, no registrar_deuda.)
 - ABONAR/PAGAR DEUDA: "le aboné 100 a César / le pagué 50 a Julio / me devolvió 30 mi hermano / aboné a la deuda de X" → abonar_deuda. deuda.counterparty; deuda.amount; deuda.direction si se distingue.
 - CONSULTAR DEUDA PERSONAL: "cuánto le debo a César / a quién le debo / cuánto debo / cuánto me deben de lo que presté / mis préstamos / mis deudas" → consultar_deuda_personal. deuda.counterparty = persona si la nombra, si no null. (Ojo: "quién me debe" de PACIENTES es consultar_deudas.)
-- CREAR META DE AHORRO: "quiero ahorrar 5000 para Georgia / meta para SERUMS / nueva meta viaje a X (necesito 3000)" → crear_meta. meta.name = nombre de la meta; meta.target = monto objetivo si lo da (o null); meta.currency.
+- CREAR META DE AHORRO: "quiero ahorrar 5000 para Georgia / meta para SERUMS / quiero ir a Italia y necesito 12000 / nueva meta viaje a X para el 2028" → crear_meta. meta.name = nombre de la meta (ej. "Viaje a Italia"); meta.target = monto objetivo (costo) si lo da (o null); meta.currency; meta.target_date = fecha objetivo en ISO YYYY-MM-DD si da una fecha CONCRETA o un año ("para diciembre 2028" → 2028-12-01; "en 2028" → 2028-12-31). Si la fecha depende de un dato que no tienes (ej. "en mi cumpleaños 27") deja target_date en null.
 - APORTAR A META: "ahorré 100 para Georgia / mete 50 a la meta de SERUMS / guardé 200 para el viaje / aporté 80 al fondo de emergencia" → aportar_meta. meta.name = a qué meta; meta.amount = cuánto aporta.
-- CONSULTAR METAS: "cómo van mis metas / cuánto llevo para Georgia / cuánto me falta para X / mis metas de ahorro" → consultar_metas.
+- CONSULTAR METAS: "cómo van mis metas / cuánto llevo para Georgia / mis metas de ahorro" → consultar_metas.
+- CONSULTAR PLAN DE META (cuánto ahorrar al mes para llegar): "cuál es mi plan para Georgia / cuánto necesito ahorrar al mes para Italia / cuánto debo guardar por mes para <meta> / arma mi plan de ahorro para X" → consultar_plan. meta.name = la meta; meta.target = costo si lo menciona ahora; meta.target_date = fecha ISO si la menciona ahora.
+- REGISTRAR SUSCRIPCIÓN / PAGO FIJO: "agrega una suscripción: Netflix 30 el día 15 / pago Claude 73 el 9 de cada mes / tengo Spotify 20 mensual / anota el pago de mi tarjeta Visa el día 5 / mi crédito BCP se paga el 20" → registrar_pago_fijo. pagofijo.concept = nombre (Netflix, Claude, Tarjeta Visa, Crédito BCP…); pagofijo.amount = monto mensual si lo dice (o null); pagofijo.day = día del mes 1-31 si lo dice (o null); pagofijo.category = "Suscripción" (apps/servicios), "Tarjeta" (tarjeta de crédito), "Crédito" (préstamo/crédito), "Servicio" (luz/agua/internet), o "Otro".
+- CONSULTAR PAGOS FIJOS: "qué suscripciones tengo / qué pagos fijos tengo / qué me toca pagar / cuánto pago al mes en suscripciones / qué pagos vienen / mis pagos del mes" → consultar_pagos_fijos.
 - AGENDAR CITA: "agéndame a X el <día/hora> / ponle cita a X / resérvale a X / cítala a X ..." → agendar_cita. cita.patient_name = nombre del paciente; cita.start_iso = ISO con offset Lima -05:00 calculado desde el día/hora que da.
 - REPROGRAMAR CITA: "cambia/mueve/reprograma la cita de X al <día/hora>" → reprogramar_cita. cita.patient_name; cita.new_start_iso = ISO -05:00.
 - CANCELAR CITA: "cancela/anula la cita de X" → cancelar_cita. cita.patient_name.
@@ -188,6 +193,9 @@ export async function handleNeuraInstruction(text) {
     case 'crear_meta':           return handleCrearMeta(parsed.meta, text);
     case 'aportar_meta':         return handleAportarMeta(parsed.meta, text);
     case 'consultar_metas':      return handleConsultarMetas();
+    case 'consultar_plan':       return handleConsultarPlan(parsed.meta);
+    case 'registrar_pago_fijo':  return handleRegistrarPagoFijo(parsed.pagofijo, text);
+    case 'consultar_pagos_fijos': return handleConsultarPagosFijos();
     case 'agendar_cita':         return agendarCita(parsed.cita);
     case 'reprogramar_cita':     return reprogramarCita(parsed.cita);
     case 'cancelar_cita':        return cancelarCita(parsed.cita);
@@ -845,7 +853,7 @@ async function reflexionar(text) {
 function ayudaMenu() {
   const txt = `🌿 *Soy Mia, tu asistente.* Háblame normal (texto o audio) y yo me encargo:
 
-💰 *Plata* — "gasté 20 con el BBVA" · "¿cuánto tengo en el BCP?" · "le aboné 100 a César" · "¿a quién le debo?" · "mete 50 a mi meta de Georgia" · "¿cómo van mis metas?" · "¿en qué se me fue la plata?"
+💰 *Plata* — "gasté 20 con el BBVA" · "¿cuánto tengo en el BCP?" · "le aboné 100 a César" · "¿a quién le debo?" · "mete 50 a mi meta de Georgia" · "¿cuál es mi plan para Italia?" · "agrega Netflix 30 el día 15" · "¿qué pagos me tocan?" · "¿en qué se me fue la plata?"
 🩺 *Consultorio* — "terminé con Ana, trabajamos…" · "Ana me pagó 105" · "Ana compró un paquete de 6" · "¿cuántas sesiones le quedan a Ana?" · "¿quién me debe?" · "¿qué trabajé con Ana?" · "agéndame a Ana el martes 4pm"
 🗓️ *Tu día* — "¿qué tengo hoy?" · "¿qué tengo esta semana?" · "recuérdame las pastillas a las 9" · "posponlo a mañana" · "ya tomé las pastillas" · "bloquéame el lunes de 5 a 6pm"
 🫂 *Tu gente* — "agrega a mi mamá" · "llamé a mi mamá"
