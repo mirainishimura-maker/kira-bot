@@ -87,6 +87,57 @@ export async function findLinkedPR(issueNumber) {
   return null;
 }
 
+// La GitHub Action de Claude NO abre el PR: empuja una rama `claude/issue-N-<ts>`
+// y deja un link "Create PR". Buscamos esa rama para abrir el PR nosotros.
+// Devuelve el nombre de la rama más reciente, o null.
+export async function findClaudeBranch(issueNumber) {
+  const c = itacaCfg();
+  try {
+    const branches = await gh(`/repos/${c.repo}/branches?per_page=100`);
+    if (!Array.isArray(branches)) return null;
+    const prefix = `claude/issue-${issueNumber}-`;
+    const matches = branches.map(b => b.name).filter(n => n.startsWith(prefix));
+    if (!matches.length) return null;
+    // El sufijo es un timestamp: el nombre mayor es el más reciente.
+    matches.sort().reverse();
+    return matches[0];
+  } catch (err) {
+    console.error('[github] findClaudeBranch error:', err.message);
+    return null;
+  }
+}
+
+// Busca un PR ya existente cuya rama origen sea `branch`. Sirve de idempotencia.
+export async function findPRByHead(branch) {
+  const c = itacaCfg();
+  const owner = c.repo.split('/')[0];
+  try {
+    const prs = await gh(`/repos/${c.repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}`);
+    if (Array.isArray(prs) && prs.length) {
+      const p = prs[0];
+      return { number: p.number, url: p.html_url, state: p.state, merged: Boolean(p.merged_at), title: p.title };
+    }
+  } catch (err) {
+    console.error('[github] findPRByHead error:', err.message);
+  }
+  return null;
+}
+
+// Abre el PR desde la rama de Claude hacia base. Si ya existía (422), lo devuelve.
+export async function createPR({ head, base = 'main', title, body }) {
+  const c = itacaCfg();
+  try {
+    const data = await gh(`/repos/${c.repo}/pulls`, { method: 'POST', body: { head, base, title, body } });
+    return { number: data.number, url: data.html_url, state: data.state, merged: false, title: data.title };
+  } catch (err) {
+    if (err.message.includes('-> 422')) {
+      const existing = await findPRByHead(head);
+      if (existing) return existing;
+    }
+    throw err;
+  }
+}
+
 // Estado de un PR. Devuelve { number, url, state, merged, title } o null.
 export async function getPR(number) {
   const c = itacaCfg();

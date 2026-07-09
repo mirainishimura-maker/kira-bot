@@ -3,8 +3,12 @@
 Mia lee **en silencio** el grupo *"conversemos las tres"*, convierte cada
 corrección (texto / audio / imagen) en algo accionable y te la manda a tu
 privado. Con tu `/ok N`, abre un issue en GitHub que **Claude implementa en una
-rama y deja como Pull Request**. Tú apruebas el PR desde el celular → Railway
-despliega → Mia te avisa. **Nada llega a producción sin tu aprobación.**
+rama**; luego **Mia abre el Pull Request**. Tú apruebas el PR desde el celular →
+Railway despliega → Mia te avisa. **Nada llega a producción sin tu aprobación.**
+
+> Detalle real (comprobado): la GitHub Action de Claude **no abre el PR** — solo
+> empuja la rama `claude/issue-N-<timestamp>` y deja un link. Por eso el cron de
+> Mia detecta esa rama y crea el PR ella misma, con `Closes #<issue>`.
 
 ```
 Gaby manda audio/foto/texto al grupo
@@ -17,7 +21,7 @@ Mia te escribe a tu privado:
    "📝 Corrección #7 (Gaby): ...  /ok 7  ·  /descartar 7"
         │  tú: /ok 7
         ▼
-Mia abre un issue @claude  →  GitHub Action implementa  →  PR en una rama
+Mia abre un issue @claude  →  Action implementa en rama  →  Mia abre el PR
         │
         ▼
 Mia te avisa: "🔧 #7 lista, revisa el PR: <link>"
@@ -44,14 +48,32 @@ El workflow ya está creado en `.github/workflows/claude.yml`. Falta activarlo:
 > Costo: cada corrección consume tokens de tu cuenta de Anthropic (la del
 > `ANTHROPIC_API_KEY`). Para un grupo de 3 personas el volumen es bajo.
 
-### 2. Token de GitHub para Mia (para que abra los issues)
-En GitHub → *Settings (tu cuenta) → Developer settings → Personal access tokens
-→ Fine-grained tokens → Generate new token*:
-- **Repository access:** solo `conversemositaca-tech/itaca-conversemos`.
+### 2. Token de GitHub para Mia (para que abra los issues y los PRs)
+
+⚠️ `conversemositaca-tech` **es una cuenta de usuario, no una organización**, y el
+repo le pertenece a ella. Un token *fine-grained* solo alcanza repos de la cuenta
+que lo emite, así que tienes dos caminos válidos:
+
+- **(a)** Fine-grained token creado **desde la cuenta `conversemositaca-tech`**.
+- **(b)** Token **clásico** desde `mirainishimura-maker` con scope `repo`
+  (los clásicos sí llegan a repos donde eres colaboradora con permiso de push).
+
+Si vas por (a): *Settings → Developer settings → Personal access tokens →
+Fine-grained tokens → Generate new token*
+- **Repository access:** solo `itaca-conversemos`.
 - **Permissions → Repository:** `Issues` = Read and write, `Pull requests` =
-  Read-only, `Contents` = Read-only, `Metadata` = Read-only.
-- Copia el token y ponlo en **EasyPanel** (servicio de kira-bot) como
-  variable de entorno `GITHUB_TOKEN`.
+  **Read and write**, `Contents` = Read-only, `Metadata` = Read-only.
+
+> `Pull requests` necesita **escritura** porque la Action de Claude solo empuja una
+> rama; **el PR lo abre Mia**.
+
+En cualquier caso, pon el token en **EasyPanel** (servicio de kira-bot) como
+variable de entorno `GITHUB_TOKEN`.
+
+Para comprobar que el token sirve, en tu terminal:
+```bash
+GH_TOKEN='<token>' gh api repos/conversemositaca-tech/itaca-conversemos --jq .full_name
+```
 
 ### 3. Tabla en Supabase
 En el **Supabase privado de Mirai** (el de `MIRAI_SUPABASE_URL`, donde vive

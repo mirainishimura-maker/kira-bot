@@ -22,7 +22,7 @@ import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { sendText, fetchMessageMediaBase64 } from '../../lib/evolution.js';
 import { transcribeAudio } from './media.js';
 import { rememberMiaSentId } from './echoTracker.js';
-import { createIssue, findLinkedPR, getPR, githubReady } from '../../lib/github.js';
+import { createIssue, findLinkedPR, getPR, githubReady, findClaudeBranch, createPR } from '../../lib/github.js';
 import { config } from '../../config.js';
 
 const TABLE = 'itaca_correcciones';
@@ -298,8 +298,9 @@ ${t.detalle}
 Instrucciones:
 - Haz el cambio de forma acotada; no toques cosas no relacionadas con este pedido.
 - Sigue las convenciones del proyecto (ver \`CLAUDE.md\`).
-- Abre un Pull Request con \`Closes #${t.id}\` en la descripción. **No hagas merge tú** — lo revisa y aprueba una persona.
-- Si el pedido es ambiguo, elige la interpretación más razonable y explícala en la descripción del PR.`;
+- Deja los cambios en tu rama de trabajo. **No hagas merge.** Mia abre el Pull Request
+  y una persona lo revisa y aprueba antes de que se despliegue a producción.
+- Si el pedido es ambiguo, elige la interpretación más razonable y explícala en el commit.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +335,25 @@ export async function chequearPRs() {
   let notified = 0;
   for (const t of data ?? []) {
     if (!t.issue_number) continue;
-    const pr = t.pr_number ? await getPR(t.pr_number) : await findLinkedPR(t.issue_number);
+    let pr = t.pr_number ? await getPR(t.pr_number) : await findLinkedPR(t.issue_number);
+
+    // La Action de Claude empuja la rama `claude/issue-N-<ts>` pero NO abre el PR
+    // (solo deja un link). Si aún no hay PR, lo abrimos nosotros desde esa rama.
+    if (!pr && t.estado === 'en_progreso') {
+      const branch = await findClaudeBranch(t.issue_number);
+      if (branch) {
+        try {
+          pr = await createPR({
+            head: branch,
+            title: `[Corrección #${t.id}] ${t.titulo}`,
+            body: `Implementa la corrección #${t.id}, pedida por ${t.autor || 'el equipo'} en el grupo de WhatsApp.\n\nCloses #${t.issue_number}`,
+          });
+          console.log(`[itaca] PR abierto para la corrección #${t.id}: ${pr?.url}`);
+        } catch (e) {
+          console.error(`[itaca] no pude abrir el PR de la #${t.id}:`, e.message);
+        }
+      }
+    }
     if (!pr) continue;
 
     if (t.estado === 'en_progreso') {
