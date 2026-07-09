@@ -5,6 +5,7 @@
 import {
   detectChannel, isAuthorizedGroup, logGroupForDiscovery,
   isAddressedToKira, getGroupJid,
+  isItacaGroup, recordGroupSighting,
   CHANNEL_GROUP, CHANNEL_PRIVATE,
 } from '../services/channels.js';
 import { findMemberByPhone, phoneFromJid } from '../services/members.js';
@@ -17,6 +18,7 @@ import { config } from '../config.js';
 import {
   findPatientByPhone, normalizePhone, isMiaCommand, handleMiaCommand,
   handleMiaMessage, handleMiraiManualOutbound, isMiaSentId,
+  handleItacaGroupMessage,
 } from '../services/mia/index.js';
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, analizarImagenParaMia } from '../services/mia/media.js';
@@ -79,6 +81,22 @@ async function processMessage(data) {
   if (!channel) {
     console.log('[webhook] canal desconocido:', remoteJid);
     return;
+  }
+
+  // ---- Grupo de correcciones de ITACA ("conversemos las tres") ----
+  // Mia LEE este grupo en silencio (nunca postea ahí): digiere cada mensaje,
+  // lo clasifica y le avisa a Mirai en privado. Tiene prioridad sobre todo el
+  // resto del ruteo de grupos.
+  if (channel === CHANNEL_GROUP && isItacaGroup(remoteJid)) {
+    if (config.mia.enabled && config.mia.itaca?.enabled) {
+      handleItacaGroupMessage(data).catch(e => console.error('[itaca] error procesando grupo:', e.message));
+    }
+    return; // NUNCA respondemos en este grupo
+  }
+
+  // Registramos cualquier OTRO grupo para el comando /grupos (descubrir su JID).
+  if (channel === CHANNEL_GROUP) {
+    recordGroupSighting(remoteJid, data?.pushName, extractText(data));
   }
 
   // Modo Mia-only: KIRA-mkt no corre. Mia no atiende grupos, así que cualquier

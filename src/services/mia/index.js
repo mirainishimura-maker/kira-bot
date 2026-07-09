@@ -22,6 +22,7 @@ export { isMiaCommand, handleMiaCommand } from './commands.js';
 export { findPatientByPhone, normalizePhone } from './patients.js';
 export { isMiaSentId } from './echoTracker.js';
 export { logMessage } from './conversations.js';
+export { handleItacaGroupMessage } from './itacaCorrecciones.js';
 
 export async function handleMiaMessage({ patient, text, messageId, senderJid }) {
   // 1. Loguear mensaje entrante del paciente.

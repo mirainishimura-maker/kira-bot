@@ -160,6 +160,25 @@ export const config = {
         url: process.env.MIA_GUIA_URL || 'https://bnhurojxksuvdgraocoh.supabase.co/storage/v1/object/public/neura/guias/calma-tu-ansiedad.pdf',
         nombre: process.env.MIA_GUIA_NOMBRE || 'NEURA · Calma tu ansiedad.pdf',
       },
+      // ITACA · Correcciones desde el grupo "conversemos las tres". Mia LEE ese
+      // grupo en silencio (nunca postea ahí), digiere cada corrección y se la
+      // manda a Mirai a su privado. Con /ok N abre un issue en GitHub que la
+      // GitHub Action de Claude implementa en una rama + PR (nunca toca prod
+      // sin que Mirai apruebe el PR). Todo apagado hasta setear ITACA_GROUP_JID.
+      itaca: {
+        // JID del grupo (formato 120363xxx@g.us). Descúbrelo con /grupos.
+        groupJid: process.env.ITACA_GROUP_JID || null,
+        enabled: Boolean(process.env.ITACA_GROUP_JID),
+        // Repo donde vive el sistema y token para abrir issues.
+        repo: process.env.ITACA_REPO || 'conversemositaca-tech/itaca-conversemos',
+        githubToken: process.env.GITHUB_TOKEN || '',
+        // Debounce para agrupar varios mensajes seguidos de la misma persona
+        // (ej: 3 audios que son una sola corrección). Default 60s.
+        debounceMs: (() => {
+          const n = Number(process.env.ITACA_DEBOUNCE_MS);
+          return Number.isFinite(n) && n > 0 ? n : 60_000;
+        })(),
+      },
     };
   })(),
 

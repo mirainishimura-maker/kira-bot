@@ -18,6 +18,10 @@
 //   /agendar 51999 Fran                      (mensaje para coordinar cita; envía con /confirmar)
 //   /confirmar                               (envía el último /paquete o /agendar pendiente)
 //   /cancelar                                (descarta el envío pendiente)
+//   /correcciones                            (lista las correcciones de ITACA pendientes)
+//   /ok 7                                    (implementa la corrección #7 → issue + PR)
+//   /descartar 7                             (descarta la corrección #7)
+//   /grupos                                  (lista JIDs de grupos vistos → setear ITACA_GROUP_JID)
 
 import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
 import { logMessage } from './conversations.js';
@@ -28,9 +32,11 @@ import { generateLeadReport } from './leadReport.js';
 import { runMetricas } from './metricas.js';
 import { blockRange, listBlocks, unblockRange } from './calendar.js';
 import { generarYSubirPlan } from './planCard.js';
+import { listPendientes, formatoListaPendientes, aprobarCorreccion, descartarCorreccion } from './itacaCorrecciones.js';
+import { getRecentGroups } from '../channels.js';
 import { config } from '../../config.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|ok|implementar|descartar|grupos)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -71,6 +77,10 @@ export async function handleMiaCommand(text) {
     if (command === 'agendar')     return await cmdAgendar(rest);
     if (command === 'confirmar')   return await cmdConfirmar();
     if (command === 'cancelar')    return cmdCancelar();
+    if (command === 'correcciones' || command === 'correccion') return await cmdCorrecciones();
+    if (command === 'ok' || command === 'implementar')          return await cmdImplementar(rest);
+    if (command === 'descartar')                                return await cmdDescartar(rest);
+    if (command === 'grupos')                                   return cmdGrupos();
   } catch (err) {
     return reply(`⚠️ Error: ${err.message}`);
   }
@@ -685,6 +695,33 @@ function cmdCancelar() {
   const n = pendingEnvio.nombre;
   pendingEnvio = null;
   return reply(`Cancelado. No se envió nada a ${n}.`);
+}
+
+// ---- ITACA · correcciones desde el grupo "conversemos las tres" ----
+async function cmdCorrecciones() {
+  const tickets = await listPendientes();
+  return reply(formatoListaPendientes(tickets));
+}
+
+async function cmdImplementar(rest) {
+  const id = parseInt(String(rest).trim(), 10);
+  if (!Number.isInteger(id)) return reply('Uso: /ok N  (ej. /ok 7). Mira los números con /correcciones.');
+  return reply(await aprobarCorreccion(id));
+}
+
+async function cmdDescartar(rest) {
+  const id = parseInt(String(rest).trim(), 10);
+  if (!Number.isInteger(id)) return reply('Uso: /descartar N  (ej. /descartar 7).');
+  return reply(await descartarCorreccion(id));
+}
+
+function cmdGrupos() {
+  const grupos = getRecentGroups();
+  if (!grupos.length) {
+    return reply('Todavía no vi mensajes de ningún grupo. Manda un mensaje en el grupo "conversemos las tres" y vuelve a probar /grupos.');
+  }
+  const lineas = grupos.map(g => `• ${g.jid}\n   últ: ${g.sender}${g.preview ? ` — "${g.preview}"` : ''} (${g.count} msj)`);
+  return reply(`*Grupos que Mia vio hace poco:*\n\n${lineas.join('\n')}\n\nCopia el JID del grupo "conversemos las tres" a la env var *ITACA_GROUP_JID* en EasyPanel y redespliega.`);
 }
 
 function reply(text) {

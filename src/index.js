@@ -20,6 +20,7 @@ import { startGenteCron, runGenteCheck } from './services/mia/gente.js';
 import { startPagosCron, runPagosRecordatorio } from './services/mia/pagosFijos.js';
 import { runMetricas } from './services/mia/metricas.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
+import { startItacaPRCron, chequearPRs } from './services/mia/itacaCorrecciones.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -288,6 +289,17 @@ app.post('/admin/gente', async (req, res) => {
   catch (err) { console.error('[admin/gente] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
 });
 
+// ITACA · fuerza el chequeo de PRs de las correcciones (normalmente corre cada
+// 3 min). Útil para no esperar al cron cuando acabas de aprobar/mergear un PR.
+app.post('/admin/itaca-prs', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  try { res.json(await chequearPRs()); }
+  catch (err) { console.error('[admin/itaca-prs] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
+});
+
 app.listen(config.port, () => {
   const mode = config.miaOnly ? 'MIA-ONLY (sin KIRA-mkt)' : 'completo (KIRA-mkt + Mia)';
   console.log(`[kira] escuchando en :${config.port} (${config.env}, TZ=${config.tz}) | modo: ${mode}`);
@@ -310,6 +322,7 @@ app.listen(config.port, () => {
     startAgendaSyncCron();
     startGenteCron();
     startPagosCron();
+    startItacaPRCron();
   }
   // NEURA (publicador de Instagram) — independiente de Mia, se auto-gatea.
   startNeuraCron();
