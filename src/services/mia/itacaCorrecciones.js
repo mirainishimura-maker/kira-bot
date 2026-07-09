@@ -324,6 +324,11 @@ export function formatoListaPendientes(tickets) {
 // ---------------------------------------------------------------------------
 // Seguimiento de PRs (cron): avisa cuándo revisar y cuándo ya está en producción
 // ---------------------------------------------------------------------------
+// Tickets cuyo fallo al abrir el PR ya le avisamos a Mirai. Evita repetir el
+// aviso cada 3 minutos. En memoria: si el proceso reinicia, vuelve a avisar una
+// vez, que es preferible a callarse.
+const erroresAvisados = new Set();
+
 export async function chequearPRs() {
   if (!config.mia.itaca?.enabled || !githubReady() || !miraiSupabase) return { checked: 0 };
   const { data, error } = await miraiSupabase
@@ -349,8 +354,17 @@ export async function chequearPRs() {
             body: `Implementa la corrección #${t.id}, pedida por ${t.autor || 'el equipo'} en el grupo de WhatsApp.\n\nCloses #${t.issue_number}`,
           });
           console.log(`[itaca] PR abierto para la corrección #${t.id}: ${pr?.url}`);
+          erroresAvisados.delete(t.id);
         } catch (e) {
           console.error(`[itaca] no pude abrir el PR de la #${t.id}:`, e.message);
+          // No fallar en silencio: Mirai debe enterarse (una sola vez por ticket).
+          if (!erroresAvisados.has(t.id)) {
+            erroresAvisados.add(t.id);
+            const pista = /403|404/.test(e.message)
+              ? '\n\nProbablemente al *GITHUB_TOKEN* le falta el permiso *Pull requests: Read and write*.'
+              : '';
+            await avisarMirai(`⚠️ Claude ya implementó la corrección #${t.id} ("${t.titulo}"), pero *no pude abrir el PR*.\n\n${e.message}${pista}\n\nCuando lo arregles, lo reintento solo (cada 3 min).`);
+          }
         }
       }
     }
