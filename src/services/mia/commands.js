@@ -14,6 +14,7 @@
 //   /bloquear 7/7 tarde a 12/7 trabajo misionero   (Mia no ofrece esos turnos)
 //   /desbloquear 7/7 a 12/7                  (quita el bloqueo de ese rango)
 //   /bloqueos                                (lista los bloqueos activos)
+//   (lote) varias líneas /bloquear en UN mensaje → las procesa todas y resume
 //   /paquete 51999 Fran 6 Procesar la ansiedad  (arma tarjeta + preview; envía con /confirmar)
 //   /agendar 51999 Fran                      (mensaje para coordinar cita; envía con /confirmar)
 //   /confirmar                               (envía el último /paquete o /agendar pendiente)
@@ -49,7 +50,66 @@ export function isMiaCommand(text) {
   return COMMAND_RE.test(text.trim());
 }
 
+// Un mensaje puede traer varias líneas de comando (p. ej. un cronograma pegado
+// como muchos /bloquear). Si detecto 2+ líneas que son comandos, las corro en
+// lote y devuelvo un resumen; si no, sigue el flujo normal (que admite comandos
+// multilínea como /notas).
 export async function handleMiaCommand(text) {
+  const cmdLines = (text ?? '')
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => COMMAND_RE.test(l));
+  if (cmdLines.length >= 2) return await handleBatch(cmdLines);
+  return await runSingleCommand(text);
+}
+
+// Procesa varias líneas de comando de un solo mensaje. Los /bloquear se resumen
+// en una lista compacta (ok / con error); cualquier otro comando se ejecuta y su
+// respuesta se adjunta tal cual, para no ignorar nada de lo que mandó Mirai.
+async function handleBatch(lines) {
+  const ok = [];
+  const fail = [];
+  const extra = [];
+
+  for (const line of lines) {
+    const m = line.match(/^\/(\w+)\s*(.*)$/s);
+    const command = (m?.[1] || '').toLowerCase();
+    const rest = m?.[2] || '';
+
+    if (command === 'bloquear') {
+      if (!rest.trim()) { fail.push({ line, error: 'Falta el rango (fecha/hora).' }); continue; }
+      try {
+        const st = await tryBloquear(rest);
+        if (st.ok) ok.push(st.label);
+        else fail.push({ line, error: st.error });
+      } catch (err) {
+        fail.push({ line, error: err.message });
+      }
+    } else {
+      try {
+        const r = await runSingleCommand(line);
+        if (r?.messages) extra.push(...r.messages);
+      } catch (err) {
+        fail.push({ line, error: err.message });
+      }
+    }
+  }
+
+  const parts = [`📋 Procesé ${lines.length} comandos:`];
+  if (ok.length) {
+    parts.push('');
+    parts.push(`✅ ${ok.length} bloqueado${ok.length === 1 ? '' : 's'}:`);
+    parts.push(...ok.map((l) => `  • ${l}`));
+  }
+  if (fail.length) {
+    parts.push('');
+    parts.push(`⚠️ ${fail.length} con error:`);
+    parts.push(...fail.map((f) => `  • ${f.line}\n     → ${f.error}`));
+  }
+  return { messages: [{ channel: 'private', text: parts.join('\n') }, ...extra] };
+}
+
+async function runSingleCommand(text) {
   const trimmed = (text ?? '').trim();
   const match = trimmed.match(/^\/(\w+)\s*(.*)$/s);
   if (!match) return reply('No reconozco el comando. Usa /paciente, /pacientes, /quitar o /notas.');
@@ -533,17 +593,34 @@ const USO_BLOQUEAR =
   '• /bloquear 7/7 tarde a 12/7 trabajo misionero  (varios días)\n' +
   'Entiende hoy/mañana, días de semana, "7 de julio", y horas tipo 5pm o 17:00.';
 
-async function cmdBloquear(rest) {
-  if (!rest.trim()) return reply(USO_BLOQUEAR);
+// Núcleo compartido por el comando individual y el modo lote: valida el rango,
+// crea el bloqueo y devuelve estado en vez de texto.
+async function tryBloquear(rest) {
   const p = parseRangoBloqueo(rest);
-  if (p.error) return reply(`${p.error}\n\n${USO_BLOQUEAR}`);
-
+  if (p.error) return { ok: false, error: p.error, usage: true };
   const motivo = p.motivo || 'No disponible';
   const r = await blockRange({ startISO: p.startISO, endISO: p.endISO, motivo });
-  if (!r.ok) return reply(`⚠️ No pude bloquear: ${r.error}`);
+  if (!r.ok) return { ok: false, error: r.error };
+  return {
+    ok: true,
+    inicio_label: r.inicio_label,
+    fin_label: r.fin_label,
+    motivo: r.motivo,
+    label: `${r.inicio_label} → ${r.fin_label}${r.motivo ? ` — ${r.motivo}` : ''}`,
+  };
+}
+
+async function cmdBloquear(rest) {
+  if (!rest.trim()) return reply(USO_BLOQUEAR);
+  const st = await tryBloquear(rest);
+  if (!st.ok) {
+    return st.usage
+      ? reply(`${st.error}\n\n${USO_BLOQUEAR}`)
+      : reply(`⚠️ No pude bloquear: ${st.error}`);
+  }
   return reply(
-    `🚫 Bloqueado: ${r.inicio_label}\n           → ${r.fin_label}\n` +
-    `Motivo: ${r.motivo}\n\n` +
+    `🚫 Bloqueado: ${st.inicio_label}\n           → ${st.fin_label}\n` +
+    `Motivo: ${st.motivo}\n\n` +
     `Mia no ofrecerá esos turnos. Para quitarlo: /desbloquear ${rest.trim()}`
   );
 }
