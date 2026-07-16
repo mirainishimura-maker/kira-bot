@@ -201,7 +201,7 @@ async function processMessage(data) {
         }
         console.log(`[webhook] comando Mia desde Mirai: ${text.slice(0, 80)}`);
         try {
-          const result = await handleMiaCommand(text);
+          const result = await handleMiaCommand(text, { senderJid: remoteJid });
           await dispatchMessages(result.messages, { senderJid: remoteJid });
         } catch (err) {
           console.error('[webhook] error procesando comando Mia:', err.message);

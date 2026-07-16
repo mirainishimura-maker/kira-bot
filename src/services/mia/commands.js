@@ -54,12 +54,12 @@ export function isMiaCommand(text) {
 // como muchos /bloquear). Si detecto 2+ líneas que son comandos, las corro en
 // lote y devuelvo un resumen; si no, sigue el flujo normal (que admite comandos
 // multilínea como /notas).
-export async function handleMiaCommand(text) {
+export async function handleMiaCommand(text, opts = {}) {
   const cmdLines = (text ?? '')
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => COMMAND_RE.test(l));
-  if (cmdLines.length >= 2) return await handleBatch(cmdLines);
+  if (cmdLines.length >= 2) return await handleBatch(cmdLines, opts);
   return await runSingleCommand(text);
 }
 
@@ -67,8 +67,15 @@ export async function handleMiaCommand(text) {
 // pegado como muchos /bloquear). Es IDEMPOTENTE: consulta los bloqueos que ya
 // existen y NO recrea los que están, así reenviar el mismo bloque no duplica.
 // Los comandos que no son /bloquear se ejecutan igual y su respuesta se adjunta.
-async function handleBatch(lines) {
+async function handleBatch(lines, { senderJid } = {}) {
   console.log(`[mia/batch] recibí ${lines.length} líneas de comando`);
+  // Aviso inmediato: el resumen puede tardar unos segundos mientras se crean los
+  // bloqueos en el calendario, así Mirai sabe al toque que llegó. Si este envío
+  // falla, el error queda logueado (diagnóstico directo del canal de respuesta).
+  if (senderJid) {
+    try { await sendText(senderJid, `⏳ Recibí ${lines.length} comandos, procesando…`); }
+    catch (e) { console.error('[mia/batch] no pude enviar el aviso inicial:', e.message); }
+  }
   const created = [];   // bloqueos nuevos
   const already = [];   // ya existían (dedup)
   const fail = [];      // { line, error }
