@@ -15,16 +15,21 @@ export function isCalendarEnabled() {
   return Boolean(URL && SECRET);
 }
 
-async function callCal(action, data) {
+async function callCal(action, data, { timeoutMs = 20000 } = {}) {
   if (!isCalendarEnabled()) {
     return { ok: false, error: 'calendario no configurado (falta MIA_SHEET_WEBHOOK_URL/_SECRET)' };
   }
+  // Timeout duro: si Apps Script no responde, abortamos en vez de colgar el
+  // handler para siempre (así Mia siempre puede responder, aunque sea el error).
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, secret: SECRET, data }),
       redirect: 'follow', // Apps Script redirige
+      signal: ctrl.signal,
     });
     if (!res.ok) {
       const text = await res.text();
@@ -38,8 +43,11 @@ async function callCal(action, data) {
     }
     return { ok: true, data: json.data };
   } catch (err) {
-    console.error(`[mia/cal] ${action} exception:`, err.message);
-    return { ok: false, error: err.message };
+    const msg = err.name === 'AbortError' ? `sin respuesta tras ${timeoutMs}ms` : err.message;
+    console.error(`[mia/cal] ${action} exception:`, msg);
+    return { ok: false, error: msg };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

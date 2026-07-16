@@ -31,7 +31,7 @@ import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
 import { generateLeadReport } from './leadReport.js';
 import { runMetricas } from './metricas.js';
-import { blockRange, listBlocks, unblockRange } from './calendar.js';
+import { blockRange, listBlocks, unblockRange, slotLabel } from './calendar.js';
 import { generarYSubirPlan } from './planCard.js';
 import { listPendientes, formatoListaPendientes, aprobarCorreccion, descartarCorreccion } from './itacaCorrecciones.js';
 import { getRecentGroups } from '../channels.js';
@@ -63,28 +63,30 @@ export async function handleMiaCommand(text) {
   return await runSingleCommand(text);
 }
 
-// Procesa varias líneas de comando de un solo mensaje. Los /bloquear se resumen
-// en una lista compacta (ok / con error); cualquier otro comando se ejecuta y su
-// respuesta se adjunta tal cual, para no ignorar nada de lo que mandó Mirai.
+// Procesa varias líneas de comando de un solo mensaje (p. ej. un cronograma
+// pegado como muchos /bloquear). Es IDEMPOTENTE: consulta los bloqueos que ya
+// existen y NO recrea los que están, así reenviar el mismo bloque no duplica.
+// Los comandos que no son /bloquear se ejecutan igual y su respuesta se adjunta.
 async function handleBatch(lines) {
-  const ok = [];
-  const fail = [];
-  const extra = [];
+  console.log(`[mia/batch] recibí ${lines.length} líneas de comando`);
+  const created = [];   // bloqueos nuevos
+  const already = [];   // ya existían (dedup)
+  const fail = [];      // { line, error }
+  const extra = [];     // respuestas de comandos que no son /bloquear
 
+  // 1) Parseo local de las líneas /bloquear (rápido, sin red). El resto se corre
+  //    aparte para no ignorarlo.
+  const bloqueos = [];  // { line, startISO, endISO, motivo }
   for (const line of lines) {
     const m = line.match(/^\/(\w+)\s*(.*)$/s);
     const command = (m?.[1] || '').toLowerCase();
-    const rest = m?.[2] || '';
+    const rest = (m?.[2] || '').trim();
 
     if (command === 'bloquear') {
-      if (!rest.trim()) { fail.push({ line, error: 'Falta el rango (fecha/hora).' }); continue; }
-      try {
-        const st = await tryBloquear(rest);
-        if (st.ok) ok.push(st.label);
-        else fail.push({ line, error: st.error });
-      } catch (err) {
-        fail.push({ line, error: err.message });
-      }
+      if (!rest) { fail.push({ line, error: 'Falta el rango (fecha/hora).' }); continue; }
+      const p = parseRangoBloqueo(rest);
+      if (p.error) { fail.push({ line, error: p.error }); continue; }
+      bloqueos.push({ line, startISO: p.startISO, endISO: p.endISO, motivo: p.motivo || 'No disponible' });
     } else {
       try {
         const r = await runSingleCommand(line);
@@ -95,17 +97,44 @@ async function handleBatch(lines) {
     }
   }
 
-  const parts = [`📋 Procesé ${lines.length} comandos:`];
-  if (ok.length) {
-    parts.push('');
-    parts.push(`✅ ${ok.length} bloqueado${ok.length === 1 ? '' : 's'}:`);
-    parts.push(...ok.map((l) => `  • ${l}`));
+  // 2) Traigo los bloqueos ya existentes UNA vez para no duplicar en reenvíos.
+  const existentes = new Set();
+  const keyOf = (a, b) => `${new Date(a).getTime()}|${new Date(b).getTime()}`;
+  if (bloqueos.length) {
+    const cur = await listBlocks();
+    if (cur.ok) for (const b of cur.blocks) existentes.add(keyOf(b.inicio_iso, b.fin_iso));
+    else console.warn(`[mia/batch] no pude listar bloqueos existentes: ${cur.error}`);
+  }
+
+  // 3) Creo solo los que faltan.
+  for (const b of bloqueos) {
+    const key = keyOf(b.startISO, b.endISO);
+    if (existentes.has(key)) { already.push(`${slotLabel(b.startISO)} — ${b.motivo}`); continue; }
+    try {
+      const r = await blockRange({ startISO: b.startISO, endISO: b.endISO, motivo: b.motivo });
+      if (r.ok) { created.push(`${r.inicio_label} — ${r.motivo}`); existentes.add(key); }
+      else fail.push({ line: b.line, error: r.error });
+    } catch (err) {
+      fail.push({ line: b.line, error: err.message });
+    }
+  }
+  console.log(`[mia/batch] listo: ${created.length} creados, ${already.length} ya existían, ${fail.length} con error`);
+
+  // 4) Resumen (siempre responde algo).
+  const parts = [`📋 Recibí ${lines.length} comando${lines.length === 1 ? '' : 's'}:`];
+  if (created.length) {
+    parts.push('', `✅ ${created.length} bloqueado${created.length === 1 ? '' : 's'} nuevo${created.length === 1 ? '' : 's'}:`);
+    parts.push(...created.map((l) => `  • ${l}`));
+  }
+  if (already.length) {
+    parts.push('', `↺ ${already.length} ya estaba${already.length === 1 ? '' : 'n'} (no dupliqué):`);
+    parts.push(...already.map((l) => `  • ${l}`));
   }
   if (fail.length) {
-    parts.push('');
-    parts.push(`⚠️ ${fail.length} con error:`);
+    parts.push('', `⚠️ ${fail.length} con error:`);
     parts.push(...fail.map((f) => `  • ${f.line}\n     → ${f.error}`));
   }
+  if (!created.length && !already.length && !fail.length) parts.push('', 'No encontré nada para procesar.');
   return { messages: [{ channel: 'private', text: parts.join('\n') }, ...extra] };
 }
 
