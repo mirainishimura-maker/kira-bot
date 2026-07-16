@@ -127,21 +127,19 @@ async function handleBatch(lines, { senderJid } = {}) {
   }
   console.log(`[mia/batch] listo: ${created.length} creados, ${already.length} ya existían, ${fail.length} con error`);
 
-  // 4) Resumen (siempre responde algo).
-  const parts = [`📋 Recibí ${lines.length} comando${lines.length === 1 ? '' : 's'}:`];
-  if (created.length) {
-    parts.push('', `✅ ${created.length} bloqueado${created.length === 1 ? '' : 's'} nuevo${created.length === 1 ? '' : 's'}:`);
-    parts.push(...created.map((l) => `  • ${l}`));
-  }
-  if (already.length) {
-    parts.push('', `↺ ${already.length} ya estaba${already.length === 1 ? '' : 'n'} (no dupliqué):`);
-    parts.push(...already.map((l) => `  • ${l}`));
-  }
+  // 4) Resumen CORTO. Los mensajes largos (17 líneas) no estaban llegando por
+  //    WhatsApp; con un conteo breve alcanza y el detalle ya está en el
+  //    calendario. Solo se listan los ERRORES, que son lo que Mirai necesita ver.
+  const linea = [];
+  if (created.length) linea.push(`✅ ${created.length} creado${created.length === 1 ? '' : 's'}`);
+  if (already.length) linea.push(`↺ ${already.length} ya estaba${already.length === 1 ? '' : 'n'}`);
+  if (fail.length)    linea.push(`⚠️ ${fail.length} con error`);
+  const parts = [linea.length ? `📋 Bloqueos: ${linea.join(', ')}.` : 'No encontré nada para procesar.'];
   if (fail.length) {
-    parts.push('', `⚠️ ${fail.length} con error:`);
-    parts.push(...fail.map((f) => `  • ${f.line}\n     → ${f.error}`));
+    parts.push('');
+    parts.push(...fail.slice(0, 6).map((f) => `• ${f.line} → ${f.error}`));
+    if (fail.length > 6) parts.push(`…y ${fail.length - 6} más.`);
   }
-  if (!created.length && !already.length && !fail.length) parts.push('', 'No encontré nada para procesar.');
   return { messages: [{ channel: 'private', text: parts.join('\n') }, ...extra] };
 }
 
