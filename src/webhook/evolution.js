@@ -18,7 +18,7 @@ import { config } from '../config.js';
 import {
   findPatientByPhone, normalizePhone, isMiaCommand, handleMiaCommand,
   handleMiaMessage, handleMiraiManualOutbound, isMiaSentId,
-  handleItacaGroupMessage,
+  handleItacaGroupMessage, logMessage,
 } from '../services/mia/index.js';
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, analizarImagenParaMia } from '../services/mia/media.js';
@@ -336,7 +336,25 @@ async function processMessage(data) {
         // Gate: si el paciente fue silenciado (/silenciar) o dado de alta
         // (/quitar), Mia NO responde — silencio total. Mirai lo atiende manual.
         if (patient.estado === 'silenciada' || patient.estado === 'alta') {
-          console.log(`[webhook] → Mia | ${patient.nombre} estado="${patient.estado}", Mia no responde (silencio).`);
+          // Mia NO responde, pero si está en PAUSA (silenciada) guardamos en
+          // silencio lo que el paciente escribe, para que al reactivarla retome
+          // con el contexto completo de lo que pasó durante la pausa.
+          if (patient.estado === 'silenciada') {
+            try {
+              const contenido = await multimodalToText(data);
+              if (contenido) {
+                await logMessage({
+                  patientId: patient.id,
+                  author: 'patient',
+                  content: contenido,
+                  whatsappMessageId: messageId,
+                });
+              }
+            } catch (err) {
+              console.error('[webhook] no pude guardar msg del paciente en pausa:', err.message);
+            }
+          }
+          console.log(`[webhook] → Mia | ${patient.nombre} estado="${patient.estado}", Mia no responde (silencio${patient.estado === 'silenciada' ? ', pero guardo contexto' : ''}).`);
           return;
         }
         // Para Mia, convertir audio/imagen a texto antes de encolar.

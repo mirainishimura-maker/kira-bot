@@ -120,9 +120,11 @@ export const config = {
       // deje de responderle, y otro para reactivarla. Los hashes se capturan en
       // runtime (/sticker parar|retomar) y se guardan en data/mia-stickers.json;
       // estas env vars los fijan permanentes (sobreviven a redeploys sin volumen).
+      // Defaults = los 2 stickers que Mirai configuró (🌙 con calma / ☀️ aquí
+      // estoy), fijados aquí para que NO se pierdan aunque el disco no persista.
       stickers: {
-        stop:   process.env.MIA_STICKER_STOP   || null,
-        resume: process.env.MIA_STICKER_RESUME || null,
+        stop:   process.env.MIA_STICKER_STOP   || 'hPBas/91EVDpTIsVKi4RhP1jl1rSlN2RRP+VeLfP1eo=',
+        resume: process.env.MIA_STICKER_RESUME || 'Wyf3rZ73PfLXSM4Cvddy7MFIjodeYFS3XY/rH0KKQIc=',
       },
       // Recontacto (follow-up automático de leads fríos). Apagado por defecto:
       // solo manda WhatsApps si MIA_RECONTACTO_ENABLED=true. Las imágenes son
