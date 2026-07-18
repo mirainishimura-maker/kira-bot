@@ -77,7 +77,8 @@ async function processMessage(data) {
     if (isMiaSentId(messageId)) return; // eco de Mia, ignorar.
     const channel = detectChannel(remoteJid);
     if (channel !== CHANNEL_PRIVATE) return; // solo nos importan privados.
-    const targetPhone = phoneFromJid(remoteJid);
+    // Si el chat es un @lid, el número real del paciente viene en remoteJidAlt.
+    const targetPhone = phoneFromJid(remoteJid) || phoneFromJid(data?.key?.remoteJidAlt);
 
     // ---- Control por STICKERS ----
     // Mirai manda su sticker de "parar"/"retomar" a un paciente. Se procesa
@@ -311,7 +312,9 @@ async function processMessage(data) {
         data?.participantPn,
         data?.key?.participantAlt,
       ].filter(Boolean)
-    : [remoteJid];
+    // En privado, cuando WhatsApp entrega un @lid, el número real viene en
+    // key.remoteJidAlt (@s.whatsapp.net). Lo incluimos para reconocer pacientes.
+    : [remoteJid, data?.key?.remoteJidAlt].filter(Boolean);
 
   let phone = null;
   let matchedJid = null;
