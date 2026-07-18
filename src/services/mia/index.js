@@ -14,6 +14,7 @@ import { config } from '../../config.js';
 import { sendText, sendImage } from '../../lib/evolution.js';
 import { askMia } from './ai.js';
 import { logMessage, shouldMiaBeSilent } from './conversations.js';
+import { registrarPagoSiComprobante } from './pagosChat.js';
 import { touchPatientInteraction, setPatientEstado, findPatientByPhone } from './patients.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
@@ -26,13 +27,29 @@ export { handleItacaGroupMessage } from './itacaCorrecciones.js';
 
 export async function handleMiaMessage({ patient, text, messageId, senderJid }) {
   // 1. Loguear mensaje entrante del paciente.
-  await logMessage({
+  const logged = await logMessage({
     patientId: patient.id,
     author: 'patient',
     content: text,
     whatsappMessageId: messageId,
   });
   await touchPatientInteraction(patient.id, { authorCounted: 'patient' });
+
+  // 1a. Si el mensaje trae comprobante de pago (captura Yape/Plin analizada
+  // por visión), registrar el pago en Neura (payments). Best-effort: un fallo
+  // aquí nunca debe frenar la respuesta al paciente.
+  try {
+    const pago = await registrarPagoSiComprobante({
+      patientId: patient.id,
+      content: text,
+      refId: logged?.id ?? messageId,
+    });
+    if (pago?.status === 'registrado') {
+      console.log(`[mia/pagos] S/${pago.monto} de ${patient.nombre} registrado en Neura (${pago.verified ? 'verificado' : 'por revisar'}).`);
+    }
+  } catch (err) {
+    console.error('[mia/pagos] no pude registrar pago del chat:', err.message);
+  }
 
   // 1b. Gate EXPLÍCITO re-chequeado al flush. El webhook ya filtra estado
   // 'silenciada'/'alta' al recibir, PERO entre ese instante y este flush
