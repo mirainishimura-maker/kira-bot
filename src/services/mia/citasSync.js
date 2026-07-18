@@ -1,5 +1,5 @@
 // NEURA · Citas del panel → Google Calendar (módulo "Conversemos").
-// Mirai (o la página pública /agendar) crea citas en la tabla `appointments`.
+// Mirai (o la página pública /agendar) crea citas en la tabla `neura_citas`.
 // Este cron las empuja al Google Calendar real vía Apps Script:
 //   - nueva/reprogramada (gcal_pushed=false) → createHold confirmado, o
 //     rescheduleAppointment si el paciente ya tenía cita en el calendario.
@@ -27,7 +27,7 @@ export async function runCitasSync() {
 
   // 1 · Citas nuevas o reprogramadas → al calendario.
   const { data: nuevas } = await miraiSupabase
-    .from('appointments')
+    .from('neura_citas')
     .select('id, start_at, note, source, patient_id, patients(nombre, phone)')
     .eq('status', 'agendada').eq('gcal_pushed', false)
     .gte('start_at', new Date().toISOString())
@@ -48,7 +48,7 @@ export async function runCitasSync() {
     }
     if (!r.ok) { failed++; console.error(`[neura/citas] push ${nombre}: ${r.error}`); continue; }
 
-    await miraiSupabase.from('appointments').update({ gcal_pushed: true }).eq('id', c.id);
+    await miraiSupabase.from('neura_citas').update({ gcal_pushed: true }).eq('id', c.id);
     pushed++;
     if (c.source === 'web') {
       await avisarMirai(`📅 *Nueva reserva web* — ${nombre} (${phone})\n${slotLabel(c.start_at)}${c.note ? `\nMotivo: ${c.note}` : ''}\n\nYa está en tu Google Calendar y en Neura → Agenda ✦`);
@@ -57,7 +57,7 @@ export async function runCitasSync() {
 
   // 2 · Canceladas desde el panel → cancelar en el calendario.
   const { data: canceladas } = await miraiSupabase
-    .from('appointments')
+    .from('neura_citas')
     .select('id, start_at, patients(nombre, phone)')
     .eq('status', 'cancelada').eq('gcal_pushed', true).eq('gcal_cancelled', false)
     .limit(20);
@@ -68,7 +68,7 @@ export async function runCitasSync() {
       const r = await cancelAppointment({ phone });
       if (!r.ok) console.warn(`[neura/citas] cancelar ${c.id}: ${r.error} (la marco igual)`);
     }
-    await miraiSupabase.from('appointments').update({ gcal_cancelled: true }).eq('id', c.id);
+    await miraiSupabase.from('neura_citas').update({ gcal_cancelled: true }).eq('id', c.id);
     cancelled++;
   }
 
