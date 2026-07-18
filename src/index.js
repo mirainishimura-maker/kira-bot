@@ -16,6 +16,7 @@ import { startGdhRecapCron, runGdhRecap } from './services/mia/gdhRecap.js';
 import { startResumenFinanzasCron, runResumenFinanzas } from './services/mia/resumenFinanzas.js';
 import { startSesionPrepCron, runSesionPrep } from './services/mia/sesionPrep.js';
 import { startAgendaSyncCron, runAgendaSync } from './services/mia/agendaSync.js';
+import { startCitasSyncCron, runCitasSync } from './services/mia/citasSync.js';
 import { startGenteCron, runGenteCheck } from './services/mia/gente.js';
 import { startPagosCron, runPagosRecordatorio } from './services/mia/pagosFijos.js';
 import { runMetricas } from './services/mia/metricas.js';
@@ -267,6 +268,17 @@ app.post('/admin/agenda-sync', async (req, res) => {
   catch (err) { console.error('[admin/agenda-sync] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
 });
 
+// Empuja las citas del panel/reservas web al Google Calendar (normalmente
+// corre cada 3 min). Protegido por WEBHOOK_SECRET.
+app.post('/admin/citas-sync', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  try { res.json(await runCitasSync()); }
+  catch (err) { console.error('[admin/citas-sync] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
+});
+
 // Recordatorio de pagos/suscripciones que vencen hoy/mañana (dry por defecto).
 app.post('/admin/pagos', async (req, res) => {
   if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
@@ -320,6 +332,7 @@ app.listen(config.port, () => {
     startResumenFinanzasCron();
     startSesionPrepCron();
     startAgendaSyncCron();
+    startCitasSyncCron();
     startGenteCron();
     startPagosCron();
     startItacaPRCron();

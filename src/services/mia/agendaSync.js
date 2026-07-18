@@ -6,7 +6,7 @@
 import cron from 'node-cron';
 import { config } from '../../config.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
-import { listUpcomingAppointments, listBlocks, isCalendarEnabled } from './calendar.js';
+import { listUpcomingAppointments, listBlocks, isCalendarEnabled, checkAvailability } from './calendar.js';
 
 async function nameForPhone(phone) {
   const digits = (phone || '').replace(/\D/g, '');
@@ -56,7 +56,26 @@ export async function runAgendaSync() {
     const { error } = await miraiSupabase.from('agenda_cache').insert(rows);
     if (error) return { ok: false, error: error.message, count: 0 };
   }
-  return { ok: true, count: rows.length };
+
+  // Turnos LIBRES → slots_cache (los ve la página pública /agendar). Best-effort:
+  // si la migración 0014 no corrió aún, el insert falla y seguimos sin drama.
+  let slots = 0;
+  try {
+    const av = await checkAvailability({ daysAhead: 14 });
+    if (av.ok) {
+      await miraiSupabase.from('slots_cache').delete().gte('slot_iso', '1970-01-01T00:00:00Z');
+      const libres = av.slots
+        .map((s) => ({ slot_iso: s.inicio_iso }))
+        .filter((s) => s.slot_iso);
+      if (libres.length) {
+        const { error } = await miraiSupabase.from('slots_cache').insert(libres);
+        if (!error) slots = libres.length;
+        else console.error('[neura/agenda] slots_cache:', error.message);
+      }
+    }
+  } catch (e) { console.error('[neura/agenda] slots:', e.message); }
+
+  return { ok: true, count: rows.length, slots };
 }
 
 export function startAgendaSyncCron() {
