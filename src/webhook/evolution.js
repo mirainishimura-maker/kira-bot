@@ -258,14 +258,18 @@ async function processMessage(data) {
           return;
         }
         console.log(`[webhook] comando Mia desde Mirai: ${text.slice(0, 80)}`);
+        // Responder al NÚMERO real de Mirai, no al remoteJid: cuando su mensaje
+        // llega como @lid, ese jid no siempre es enrutable al enviar. Su número
+        // sí lo es (es el que usa notifyMiraiPersonal y por donde recibe todo).
+        const miraiJid = `${config.mia.personalPhone}@s.whatsapp.net`;
         try {
-          const result = await handleMiaCommand(text, { senderJid: remoteJid });
-          await dispatchMessages(result.messages, { senderJid: remoteJid });
+          const result = await handleMiaCommand(text, { senderJid: miraiJid });
+          await dispatchMessages(result.messages, { senderJid: miraiJid });
         } catch (err) {
           console.error('[webhook] error procesando comando Mia:', err.message);
           await dispatchMessages(
             [{ channel: 'private', text: `⚠️ Error en comando: ${err.message}` }],
-            { senderJid: remoteJid },
+            { senderJid: miraiJid },
           );
         }
         return;
