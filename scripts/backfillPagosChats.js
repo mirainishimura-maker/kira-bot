@@ -9,7 +9,7 @@
 //   node scripts/backfillPagosChats.js         ← inserta de verdad
 
 import { miraiSupabase } from '../src/lib/miraiSupabase.js';
-import { parseComprobante, registrarPagoDeChat } from '../src/services/mia/pagosChat.js';
+import { parseComprobante, registrarPagoDeChat, esNoPaciente } from '../src/services/mia/pagosChat.js';
 
 const DRY = process.argv.includes('--dry');
 
@@ -27,9 +27,9 @@ const { data: rows, error } = await miraiSupabase
   .limit(2000);
 if (error) { console.error('Error leyendo conversations:', error.message); process.exit(1); }
 
-// Nombres de pacientes para el reporte.
+// Nombres y teléfonos de pacientes (para el reporte y la exclusión).
 const { data: pats } = await miraiSupabase.from('patients').select('id, nombre, phone');
-const nombreDe = new Map((pats ?? []).map((p) => [p.id, `${p.nombre} (${p.phone})`]));
+const pacienteDe = new Map((pats ?? []).map((p) => [p.id, p]));
 
 console.log(`${DRY ? '[DRY-RUN] ' : ''}Comprobantes encontrados en chats: ${rows.length}\n`);
 
@@ -37,13 +37,19 @@ let registrados = 0, saltados = 0, descartados = 0;
 let total = 0;
 
 for (const r of rows) {
-  const quien = nombreDe.get(r.patient_id) ?? r.patient_id;
+  const pat = pacienteDe.get(r.patient_id);
+  const quien = pat ? `${pat.nombre} (${pat.phone})` : r.patient_id;
   const fecha = r.created_at.slice(0, 10);
   const pago = parseComprobante(r.content);
 
   if (!pago || pago.descartado) {
     descartados++;
     console.log(`✗ DESCARTADO  ${fecha}  ${quien} — ${pago?.razon ?? 'sin marcador'}\n   "${r.content.slice(0, 120)}"`);
+    continue;
+  }
+  if (esNoPaciente(pat?.phone)) {
+    descartados++;
+    console.log(`✗ EXCLUIDO    ${fecha}  S/${pago.monto}  ${quien} — no es paciente (pago personal)`);
     continue;
   }
 
@@ -56,6 +62,7 @@ for (const r of rows) {
 
   const res = await registrarPagoDeChat({
     patientId: r.patient_id,
+    phone: pat?.phone,
     refId: r.id,
     monto: pago.monto,
     verified: pago.verified,

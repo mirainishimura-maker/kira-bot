@@ -12,6 +12,17 @@ import { miraiSupabase } from '../../lib/miraiSupabase.js';
 // Concepto según el modelo de precios de Mirai. Montos fuera de tabla → null.
 const CONCEPTOS = { 75: 'primera consulta', 105: 'sesión', 420: 'paquete 4', 630: 'paquete 6' };
 
+// Contactos que chatean con Mia pero NO son pacientes (amigos/trabajo): sus
+// Yapes son personales y no deben contar en las finanzas de pacientes.
+const NO_PACIENTES = new Set([
+  '51947057325', // Brando Franco
+  '51969205053', // Teresina
+  '51951657082', // Brandon Soto
+  '51973355562', // Max Chero
+]);
+
+export const esNoPaciente = (phone) => NO_PACIENTES.has(String(phone ?? '').replace(/\D/g, ''));
+
 const num = (s) => {
   const n = parseFloat(String(s).replace(/,/g, ''));
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -49,12 +60,14 @@ export function parseComprobante(content) {
   return { monto: null, verified: false, descartado: true, razon: 'marcador no reconocido' };
 }
 
-// Inserta el pago en `payments` con dos protecciones:
-//   1. Idempotencia: raw_text lleva "chat:<id>"; si ya existe, no duplica.
-//   2. Dedupe vs registro manual/voz: mismo paciente + mismo monto ± 3 días.
-// Devuelve { status: 'registrado' | 'ya_registrado' | 'duplicado' | 'error' }.
-export async function registrarPagoDeChat({ patientId, refId, monto, verified, paidAt }) {
+// Inserta el pago en `payments` con tres protecciones:
+//   1. Exclusión: contactos NO_PACIENTES nunca se registran.
+//   2. Idempotencia: raw_text lleva "chat:<id>"; si ya existe, no duplica.
+//   3. Dedupe vs registro manual/voz: mismo paciente + mismo monto ± 3 días.
+// Devuelve { status: 'registrado' | 'excluido' | 'ya_registrado' | 'duplicado' | 'error' }.
+export async function registrarPagoDeChat({ patientId, phone, refId, monto, verified, paidAt }) {
   if (!miraiSupabase || !patientId || !monto || !refId) return { status: 'error' };
+  if (esNoPaciente(phone)) return { status: 'excluido' };
   const tag = `chat:${refId}`;
 
   const { data: prev } = await miraiSupabase
@@ -91,9 +104,9 @@ export async function registrarPagoDeChat({ patientId, refId, monto, verified, p
 
 // Punto de entrada del flujo live: mira el contenido recién logueado del
 // paciente y, si trae comprobante registrable, guarda el pago. Best-effort.
-export async function registrarPagoSiComprobante({ patientId, content, refId }) {
+export async function registrarPagoSiComprobante({ patientId, phone, content, refId }) {
   const pago = parseComprobante(content);
   if (!pago || pago.descartado) return null;
-  const res = await registrarPagoDeChat({ patientId, refId, monto: pago.monto, verified: pago.verified });
+  const res = await registrarPagoDeChat({ patientId, phone, refId, monto: pago.monto, verified: pago.verified });
   return { ...res, monto: pago.monto, verified: pago.verified };
 }

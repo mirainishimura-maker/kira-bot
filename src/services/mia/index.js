@@ -41,6 +41,7 @@ export async function handleMiaMessage({ patient, text, messageId, senderJid }) 
   try {
     const pago = await registrarPagoSiComprobante({
       patientId: patient.id,
+      phone: patient.phone,
       content: text,
       refId: logged?.id ?? messageId,
     });
