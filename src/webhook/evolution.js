@@ -24,7 +24,8 @@ import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, analizarImagenParaMia } from '../services/mia/media.js';
 import { detectLeadNote, handleLeadIntake, handleReferralNote } from '../services/mia/leadIntake.js';
 import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/organicLead.js';
-import { createLeadAuto } from '../services/mia/patients.js';
+import { createLeadAuto, setPatientEstado } from '../services/mia/patients.js';
+import { stickerFingerprint, getStickerAction, consumeCapture } from '../services/mia/stickerControl.js';
 import { nombreValido } from '../services/mia/text.js';
 import { detectarHorarioYAvisar } from '../services/mia/horarioDetector.js';
 import { handleNeuraInstruction, handleNeuraImage } from '../services/mia/neuraAssistant.js';
@@ -49,6 +50,18 @@ export async function handleWebhook(req, res) {
   }
 }
 
+// WhatsApp está migrando identidades a @lid (IDs opacos). phoneFromJid() no puede
+// sacar el número de un @lid, así que los comandos de Mirai dejaban de reconocerse
+// (llegaban como @lid en vez de su número). resolvePhone() mapea el/los @lid
+// conocidos de Mirai a su número real; para cualquier otro jid = phoneFromJid.
+function resolvePhone(jid) {
+  const ph = phoneFromJid(jid);
+  if (ph) return ph;
+  const lid = String(jid || '').match(/^(\d+)@lid$/)?.[1];
+  if (lid && config.mia.personalLids.includes(lid)) return config.mia.personalPhone;
+  return null;
+}
+
 async function processMessage(data) {
   const remoteJid = data?.key?.remoteJid;
   const fromMe    = data?.key?.fromMe === true;
@@ -65,6 +78,51 @@ async function processMessage(data) {
     const channel = detectChannel(remoteJid);
     if (channel !== CHANNEL_PRIVATE) return; // solo nos importan privados.
     const targetPhone = phoneFromJid(remoteJid);
+
+    // ---- Control por STICKERS ----
+    // Mirai manda su sticker de "parar"/"retomar" a un paciente. Se procesa
+    // ANTES del lookup de paciente porque la CAPTURA (/sticker parar|retomar)
+    // debe funcionar aunque el sticker se mande a un chat que no es paciente
+    // (p. ej. Mirai se lo manda a sí misma para registrarlo).
+    const sticker = data?.message?.stickerMessage;
+    if (sticker) {
+      const fp = stickerFingerprint(sticker);
+
+      // 1) Modo captura: /sticker parar|retomar armó la captura.
+      const cap = consumeCapture(fp);
+      if (cap) {
+        const etiqueta = cap.kind === 'stop' ? 'PARAR 🔇' : 'RETOMAR 🔊';
+        const efecto = cap.kind === 'stop'
+          ? 'Mia dejará de responderle'
+          : 'Mia volverá a responderle';
+        let msg = `✅ Guardé tu sticker de ${etiqueta}. Cuando se lo mandes a un paciente desde este WhatsApp, ${efecto}.`;
+        if (cap.sameAsOther) {
+          msg += '\n\n⚠️ Ojo: es el MISMO sticker que asignaste al otro. Usa dos distintos o Mia no podrá diferenciarlos.';
+        }
+        await notifyMiraiPersonal(msg);
+        return;
+      }
+
+      // 2) Acción sobre el paciente del chat (solo si la huella coincide).
+      const action = getStickerAction(fp);
+      if (!action) return; // sticker cualquiera → no hace nada
+      const patient = await findPatientByPhone(targetPhone);
+      if (!patient) return; // Mia no le hablaba igual (no es paciente)
+      try {
+        if (action === 'stop') {
+          await setPatientEstado(patient.phone, 'silenciada');
+          await notifyMiraiPersonal(`🔇 Mia en silencio con ${patient.nombre} (${patient.phone}). Mándale tu sticker de retomar cuando quieras que vuelva.`);
+        } else {
+          await setPatientEstado(patient.phone, 'datos_parciales');
+          await notifyMiraiPersonal(`🔊 Mia reactivada con ${patient.nombre} (${patient.phone}). Le vuelve a responder cuando escriba.`);
+        }
+      } catch (err) {
+        console.error('[webhook] error aplicando sticker de control:', err.message);
+      }
+      return;
+    }
+
+    // ---- Texto manual de Mirai (flujo existente) ----
     const patient = await findPatientByPhone(targetPhone);
     if (!patient) return;
     const text = extractText(data);
@@ -124,7 +182,7 @@ async function processMessage(data) {
   // silencio). Nunca toca comandos "/..." ni notas de lead. Maneja también
   // AUDIO (que el bloque de abajo no procesa, porque exige `text`).
   if (channel === CHANNEL_PRIVATE && config.mia.enabled && config.mia.assistant?.enabled) {
-    const miraiPhone = phoneFromJid(remoteJid);
+    const miraiPhone = resolvePhone(remoteJid);
     if (miraiPhone === config.mia.personalPhone) {
       const clase = classifyMessage(data);
       // IMAGEN de Mirai: Yape → registra el pago; escrito a mano → transcribe y guarda.
@@ -170,7 +228,7 @@ async function processMessage(data) {
   // ---- Comandos de Mia y notas de leads ----
   // Mirai personal: comandos + notas. Operadores (asistente): solo notas.
   if (channel === CHANNEL_PRIVATE && config.mia.enabled && text) {
-    const senderPhone = phoneFromJid(remoteJid);
+    const senderPhone = resolvePhone(remoteJid);
     const isMirai     = senderPhone === config.mia.personalPhone;
     const isOperator  = config.mia.operatorPhones.includes(senderPhone);
     const isReferrer  = config.mia.referrerPhones.includes(senderPhone);
@@ -254,7 +312,7 @@ async function processMessage(data) {
   let phone = null;
   let matchedJid = null;
   for (const j of candidateJids) {
-    const p = phoneFromJid(j);
+    const p = resolvePhone(j);
     if (p) { phone = p; matchedJid = j; break; }
   }
   // En modo Mia-only no hay equipo de marketing: saltamos el lookup de miembros
@@ -474,6 +532,18 @@ async function dispatchMessages(messages, { senderJid }) {
     } catch (err) {
       console.error('[webhook] fallo enviando a', jid, err.message);
     }
+  }
+}
+
+// Confirmación privada a Mirai (a su número personal, NO al chat del paciente,
+// para que el paciente nunca vea estos avisos). Best-effort: si falla, se loguea.
+async function notifyMiraiPersonal(text) {
+  const p = config.mia.personalPhone;
+  if (!p) return;
+  try {
+    await sendText(`${p}@s.whatsapp.net`, text);
+  } catch (err) {
+    console.error('[webhook] no pude avisar a Mirai (personal):', err.message);
   }
 }
 

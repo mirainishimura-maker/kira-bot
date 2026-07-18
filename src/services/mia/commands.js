@@ -35,9 +35,10 @@ import { blockRange, listBlocks, unblockRange, slotLabel } from './calendar.js';
 import { generarYSubirPlan } from './planCard.js';
 import { listPendientes, formatoListaPendientes, aprobarCorreccion, descartarCorreccion } from './itacaCorrecciones.js';
 import { getRecentGroups } from '../channels.js';
+import { armCapture, stickersConfigured } from './stickerControl.js';
 import { config } from '../../config.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|ok|implementar|descartar|grupos)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|sticker|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|ok|implementar|descartar|grupos)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -162,6 +163,7 @@ async function runSingleCommand(text) {
     if (command === 'silenciar') return await cmdSilenciar(rest);
     if (command === 'activar')   return await cmdActivar(rest);
     if (command === 'notocar')   return await cmdNoTocar(rest);
+    if (command === 'sticker')   return cmdSticker(rest);
     if (command === 'metricas')  return await cmdMetricas();
     if (command === 'reporte')   return await cmdReporte();
     if (command === 'bloquear')    return await cmdBloquear(rest);
@@ -328,6 +330,44 @@ async function cmdNoTocar(rest) {
   await addPatient({ phone, nombre: 'No tocar', etiqueta: 'no_tocar' });
   await setPatientEstado(phone, 'silenciada');
   return reply(`🚫 ${phone} agregado a NO TOCAR. Mia nunca le responderá, ni aunque escriba con palabras clave. Reversible: /activar ${phone}`);
+}
+
+// /sticker parar|retomar|estado — configura los 2 stickers de control de Mia.
+// Tras armar la captura, el PRÓXIMO sticker que Mirai mande desde su WhatsApp de
+// trabajo (a cualquier chat privado, p. ej. a sí misma) se guarda como ese tipo.
+// Luego, mandarle ese sticker a un paciente para/retoma a Mia con él.
+function cmdSticker(rest) {
+  const sub = (rest || '').trim().toLowerCase().split(/\s+/)[0];
+
+  if (['parar', 'stop', 'silenciar', 'callar'].includes(sub)) {
+    armCapture('stop');
+    return reply(
+      '🔇 Ok. Mándame ahora —desde este mismo WhatsApp de trabajo, a cualquier chat privado (por ejemplo a ti misma)— el STICKER que quieres usar para PARAR a Mia.\n' +
+      'Tienes 2 minutos. Cuando llegue, te confirmo.'
+    );
+  }
+  if (['retomar', 'resume', 'activar', 'seguir'].includes(sub)) {
+    armCapture('resume');
+    return reply(
+      '🔊 Ok. Mándame ahora el STICKER que quieres usar para RETOMAR (que Mia vuelva a responderle a un paciente).\n' +
+      'Tienes 2 minutos. Cuando llegue, te confirmo.'
+    );
+  }
+  if (sub === 'estado' || sub === 'status' || sub === '') {
+    const s = stickersConfigured();
+    return reply(
+      '🎟️ Stickers de control de Mia:\n' +
+      `• PARAR: ${s.stop ? 'configurado ✓' : 'sin configurar (usa /sticker parar)'}\n` +
+      `• RETOMAR: ${s.resume ? 'configurado ✓' : 'sin configurar (usa /sticker retomar)'}\n\n` +
+      'Con los dos listos: mándale el sticker de PARAR a un paciente y Mia deja de responderle; el de RETOMAR y vuelve.'
+    );
+  }
+  return reply(
+    'Uso:\n' +
+    '/sticker parar → elegir el sticker que silencia a Mia\n' +
+    '/sticker retomar → elegir el que la reactiva\n' +
+    '/sticker estado → ver cómo están configurados'
+  );
 }
 
 // /metricas — reporte del embudo: Instagram (alcance) + WhatsApp (leads/guías) +

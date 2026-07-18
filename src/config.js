@@ -73,11 +73,17 @@ export const config = {
       ...(process.env.MIA_REFERRER_PHONES || '').split(',').map(s => s.trim()).filter(Boolean),
       '51941697769', // Clínica Mont Sinai
     ];
+    // WhatsApp migró algunas identidades a @lid (IDs opacos que NO son el número).
+    // Cuando los mensajes de Mirai llegan como @lid, el bot no la reconocía por su
+    // número. Aquí registramos su(s) @lid conocido(s) para volver a identificarla.
+    const personalLids = (process.env.MIRAI_PERSONAL_LID || '158807137218784')
+      .split(',').map(s => s.trim()).filter(Boolean);
     return {
       enabled: Boolean(url && key && aiKey && personal),
       supabase: { url, serviceRoleKey: key },
       openai:   { apiKey: aiKey, model: process.env.MIRAI_OPENAI_MODEL || 'gpt-4o-mini' },
       personalPhone: personal,
+      personalLids,
       operatorPhones,
       referrerPhones,
       // Silencio inteligente: si Mirai retoma manual EN MEDIO de un flujo de
@@ -109,6 +115,14 @@ export const config = {
       // coincidir con el identificador que Mia usa en su campo "imagenes".
       images: {
         foto_sede: process.env.MIA_IMG_FOTO_SEDE || null,
+      },
+      // Control por STICKERS: Mirai manda un sticker a un paciente para que Mia
+      // deje de responderle, y otro para reactivarla. Los hashes se capturan en
+      // runtime (/sticker parar|retomar) y se guardan en data/mia-stickers.json;
+      // estas env vars los fijan permanentes (sobreviven a redeploys sin volumen).
+      stickers: {
+        stop:   process.env.MIA_STICKER_STOP   || null,
+        resume: process.env.MIA_STICKER_RESUME || null,
       },
       // Recontacto (follow-up automático de leads fríos). Apagado por defecto:
       // solo manda WhatsApps si MIA_RECONTACTO_ENABLED=true. Las imágenes son
