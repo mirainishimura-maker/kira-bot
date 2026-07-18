@@ -99,6 +99,16 @@ export async function registrarPagoDeChat({ patientId, phone, refId, monto, veri
     console.error('[mia/pagosChat] insert payment:', error.message);
     return { status: 'error' };
   }
+
+  // Quien paga es paciente REAL: promover la etiqueta para que el panel (y el
+  // resto del sistema) deje de tratarlo como lead. El estado no se toca
+  // (respetamos silencios/altas).
+  try {
+    await miraiSupabase.from('patients')
+      .update({ etiqueta: 'paciente_activo' })
+      .eq('id', patientId).neq('etiqueta', 'paciente_activo');
+  } catch (e) { console.error('[mia/pagosChat] promover etiqueta:', e.message); }
+
   return { status: 'registrado' };
 }
 
