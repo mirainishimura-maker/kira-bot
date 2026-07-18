@@ -4,6 +4,7 @@ import { config } from '../config.js';
 
 const GROUP_SUFFIX   = '@g.us';
 const PRIVATE_SUFFIX = '@s.whatsapp.net';
+const LID_SUFFIX     = '@lid'; // WhatsApp migró chats 1-a-1 a IDs @lid opacos.
 
 export const CHANNEL_GROUP   = 'group';
 export const CHANNEL_PRIVATE = 'private';
@@ -12,6 +13,10 @@ export function detectChannel(remoteJid) {
   if (!remoteJid) return null;
   if (remoteJid.endsWith(GROUP_SUFFIX))   return CHANNEL_GROUP;
   if (remoteJid.endsWith(PRIVATE_SUFFIX)) return CHANNEL_PRIVATE;
+  // @lid es una identidad de usuario individual → chat privado 1-a-1.
+  // Sin esto, los mensajes que WhatsApp entrega como @lid (p. ej. los de Mirai)
+  // se descartaban por "canal desconocido" antes de procesarse.
+  if (remoteJid.endsWith(LID_SUFFIX))     return CHANNEL_PRIVATE;
   return null;
 }
 

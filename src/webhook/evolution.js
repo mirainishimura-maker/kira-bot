@@ -363,8 +363,8 @@ async function processMessage(data) {
       // (saludo + guía si la pide + triage). Antes solo se notificaba a Mirai.
       // Guard: nunca auto-intakear a Mirai ni a operadores (si escribieron algo
       // que no es comando/nota, su mensaje lo ve Mirai en kiramkt — silencio).
-      if (phone === config.mia.personalPhone || config.mia.operatorPhones.includes(phone) || config.mia.referrerPhones.includes(phone)) {
-        console.log(`[webhook] ${phone} = Mirai/operador/referidor — silencio.`);
+      if (!phone || phone === config.mia.personalPhone || config.mia.operatorPhones.includes(phone) || config.mia.referrerPhones.includes(phone)) {
+        console.log(`[webhook] ${phone || '(@lid sin número)'} = Mirai/operador/referidor o no identificable — silencio.`);
         return;
       }
       const leadText = await multimodalToText(data);
