@@ -20,6 +20,7 @@ import { startCitasSyncCron, runCitasSync } from './services/mia/citasSync.js';
 import { startGenteCron, runGenteCheck } from './services/mia/gente.js';
 import { startPagosCron, runPagosRecordatorio } from './services/mia/pagosFijos.js';
 import { runMetricas } from './services/mia/metricas.js';
+import { runImperio } from './services/mia/imperio.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 import { startItacaPRCron, chequearPRs } from './services/mia/itacaCorrecciones.js';
 
@@ -233,6 +234,17 @@ app.post('/admin/metricas', async (req, res) => {
     console.error('[admin/metricas] falló:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// Reporte de imperio (routine cloud de los lunes): agregados de pagos de los
+// últimos 7 días. Solo números, sin datos de pacientes. Protegido por WEBHOOK_SECRET.
+app.post('/admin/imperio', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
+  try { res.json(await runImperio()); }
+  catch (err) { console.error('[admin/imperio] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
 });
 
 // Resumen de plata ("¿en qué se me fue?"): dry por defecto; ?dry=false lo envía.
