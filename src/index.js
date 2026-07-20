@@ -24,6 +24,7 @@ import { runImperio } from './services/mia/imperio.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 import { startItacaPRCron, chequearPRs } from './services/mia/itacaCorrecciones.js';
 import { presionarBoton, presionarBotonMirai } from './services/pieroBoton.js';
+import { botonAppHtml } from './services/botonApp.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -370,6 +371,20 @@ app.post('/mirai/boton', async (req, res) => {
     if (plain) return res.status(500).type('text/plain').send('Ups, no le pude avisar 😅 intenta de nuevo en un toque.');
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// Versión "app web" de los botones — para quien no usa Atajos: la página trae
+// el botonzote 💙 y hace el POST por dentro con el mismo token. Se abre en el
+// navegador del celular y se "Añade a pantalla de inicio". Solo GET + token.
+app.get('/mirai/boton/app', (req, res) => {
+  if (!config.piero.miraiBotonToken) return res.status(404).send('');
+  if (req.query.t !== config.piero.miraiBotonToken) return res.status(401).send('');
+  res.type('html').send(botonAppHtml({ nombre: 'Piero', postPath: '/mirai/boton', token: config.piero.miraiBotonToken }));
+});
+app.get('/piero/boton/app', (req, res) => {
+  if (!config.piero.botonToken) return res.status(404).send('');
+  if (req.query.t !== config.piero.botonToken) return res.status(401).send('');
+  res.type('html').send(botonAppHtml({ nombre: 'Mirai', postPath: '/piero/boton', token: config.piero.botonToken }));
 });
 
 app.listen(config.port, () => {
