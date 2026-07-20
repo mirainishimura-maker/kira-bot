@@ -1,16 +1,19 @@
-// Botón de Piero — el Atajo del iPhone de Piero hace POST /piero/boton y:
-//   1) a Mirai le llega un WhatsApp "está pensando en ti" (ruleta de frases,
-//      con contador de toques del mes y total histórico),
-//   2) el Atajo le muestra a Piero la confirmación que devuelve este endpoint
-//      (otra ruleta, para que nunca sepa qué le va a salir).
+// Botón de cariño BIDIRECCIONAL — dos atajos, uno en cada celular:
+//   · Piero presiona (POST /piero/boton)  → a Mirai le llega "está pensando en ti",
+//   · Mirai presiona (POST /mirai/boton)  → a Piero le llega lo mismo, de vuelta.
+// En ambos casos el Atajo le muestra al que presionó una confirmación (ruleta).
+//
+// Cada dirección tiene su token (PIERO_BOTON_TOKEN / MIRAI_BOTON_TOKEN) y su
+// contador (toques del mes + total histórico, con hito cada 100). El mensaje a
+// Piero necesita PIERO_PHONE (mismo formato E.164 sin "+" que MIRAI_PERSONAL_PHONE).
 //
 // Contadores persistidos en el bucket privado de NEURA (neura-state), mismo
 // patrón que el publicador: sobreviven redeploys sin crear tablas en el
-// Supabase compartido.
+// Supabase compartido. Los toques de Piero viven en la raíz del JSON (legado
+// de la v1) y los de Mirai bajo la key `mirai`.
 //
-// Anti-spam: cada toque SIEMPRE se cuenta, pero a Mirai le llega máximo un
-// WhatsApp por minuto — si Piero se emociona y presiona 10 veces seguidas,
-// el Atajo se lo dice con cariño.
+// Anti-spam: cada toque SIEMPRE se cuenta, pero al destinatario le llega
+// máximo un WhatsApp por minuto por dirección.
 
 import { config } from '../config.js';
 import { miraiSupabase } from '../lib/miraiSupabase.js';
@@ -19,25 +22,31 @@ import { sendPrivate } from '../lib/evolution.js';
 const STATE_FILE = 'piero_boton.json';
 const COOLDOWN_MS = 60_000;
 
-let lastSentAt = 0; // en memoria: si el proceso se reinicia solo se pierde el cooldown
+// key = quién presionó; en memoria: un reinicio solo resetea el cooldown
+const lastSentAt = { piero: 0, mirai: 0 };
 
-const FRASES_MIRAI = [
-  '💙 Piero presionó el botón: está pensando en ti ahora mismo.',
-  '💙 Señal de Piero — te está pensando.',
-  '💙 Piero te mandó un toque de cariño desde su celular.',
-  '💙 Aviso importante: Piero está pensando en ti. Fin del comunicado.',
-  '💙 Piero apretó su botón favorito: tú.',
-  '💙 Interrumpimos tu día para informarte que Piero te piensa.',
-];
+function frasesPensandoEnTi(nombre) {
+  return [
+    `💙 ${nombre} presionó el botón: está pensando en ti ahora mismo.`,
+    `💙 Señal de ${nombre} — te está pensando.`,
+    `💙 ${nombre} te mandó un toque de cariño desde su celular.`,
+    `💙 Aviso importante: ${nombre} está pensando en ti. Fin del comunicado.`,
+    `💙 ${nombre} apretó su botón favorito: tú.`,
+    `💙 Interrumpimos tu día para informarte que ${nombre} te piensa.`,
+  ];
+}
 
-const FRASES_PIERO = [
-  'Entregado 💌 Mirai ya sabe que la estás pensando.',
-  'Señal enviada 💙 Le llegó directito a su WhatsApp.',
-  'Boom 💥 Dopamina en camino.',
-  'Listo ✨ Acabas de mejorarle el día.',
-  'Enviado 🚀 Cariño viajando a la velocidad de la luz.',
-  'Hecho 💙 Un pensamiento tuyo acaba de aterrizar en su celular.',
-];
+// Confirmación que ve el que presionó. `leLo` = pronombre según el destinatario.
+function frasesConfirmacion(nombre, leLo) {
+  return [
+    `Entregado 💌 ${nombre} ya sabe que ${leLo} estás pensando.`,
+    `Señal enviada 💙 Le llegó directito a su WhatsApp.`,
+    `Boom 💥 Dopamina en camino.`,
+    `Listo ✨ Acabas de mejorarle el día a ${nombre}.`,
+    `Enviado 🚀 Cariño viajando a la velocidad de la luz.`,
+    `Hecho 💙 Un pensamiento tuyo acaba de aterrizar en su celular.`,
+  ];
+}
 
 function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -72,35 +81,55 @@ async function saveState(state) {
   if (error) console.error('[piero] saveState error:', error.message);
 }
 
-export async function presionarBoton() {
+async function toque({ quien, nombre, leLo, destinoPhone }) {
   const state = await loadState();
+  // Los toques de Piero viven en la raíz (compat con la v1); los de Mirai en `mirai`.
+  let slot = state;
+  if (quien === 'mirai') {
+    if (!state.mirai || typeof state.mirai !== 'object') state.mirai = { total: 0, meses: {} };
+    if (!Number.isFinite(state.mirai.total)) state.mirai.total = 0;
+    if (!state.mirai.meses || typeof state.mirai.meses !== 'object') state.mirai.meses = {};
+    slot = state.mirai;
+  }
+
   const mes = mesKey();
-  state.total += 1;
-  state.meses[mes] = (state.meses[mes] || 0) + 1;
-  state.lastAt = new Date().toISOString();
+  slot.total += 1;
+  slot.meses[mes] = (slot.meses[mes] || 0) + 1;
+  slot.lastAt = new Date().toISOString();
   await saveState(state);
 
-  const delMes = state.meses[mes];
-  const hito = state.total % 100 === 0; // cada 100 toques históricos, fiesta
+  const delMes = slot.meses[mes];
+  const hito = slot.total % 100 === 0; // cada 100 toques históricos, fiesta
 
   const now = Date.now();
-  const enCooldown = now - lastSentAt < COOLDOWN_MS;
+  const enCooldown = now - lastSentAt[quien] < COOLDOWN_MS;
 
   let enviado = false;
   if (!enCooldown) {
+    const quienPresiona = quien === 'piero' ? 'Piero' : 'Mirai';
     const texto = hito
-      ? `🏆💙 ¡Toque #${state.total} en la historia del botón! Piero está pensando en ti (van ${delMes} este mes).`
-      : `${pick(FRASES_MIRAI)}\n\n_Toque #${delMes} del mes (${state.total} en total)._`;
-    await sendPrivate(config.mia.personalPhone, texto);
-    lastSentAt = now;
+      ? `🏆💙 ¡Toque #${slot.total} en la historia del botón! ${quienPresiona} está pensando en ti (van ${delMes} este mes).`
+      : `${pick(frasesPensandoEnTi(quienPresiona))}\n\n_Toque #${delMes} del mes (${slot.total} en total)._`;
+    await sendPrivate(destinoPhone, texto);
+    lastSentAt[quien] = now;
     enviado = true;
   }
 
   const mensaje = !enviado
-    ? `Tranquilo, galán 😄 le avisé hace un ratito. Igual conté tu toque: #${delMes} del mes.`
+    ? `Con calma 😄 le avisé hace un ratito. Igual conté tu toque: #${delMes} del mes.`
     : hito
-      ? `🏆 ¡Toque #${state.total} de la historia! Nivel leyenda. Mirai ya lo sabe.`
-      : `${pick(FRASES_PIERO)}\nToque #${delMes} del mes.`;
+      ? `🏆 ¡Toque #${slot.total} de la historia! Nivel leyenda. ${nombre} ya lo sabe.`
+      : `${pick(frasesConfirmacion(nombre, leLo))}\nToque #${delMes} del mes.`;
 
-  return { ok: true, enviado, mensaje, toques: { mes: delMes, total: state.total } };
+  return { ok: true, enviado, mensaje, toques: { mes: delMes, total: slot.total } };
+}
+
+// Piero presionó su botón → WhatsApp a Mirai.
+export function presionarBoton() {
+  return toque({ quien: 'piero', nombre: 'Mirai', leLo: 'la', destinoPhone: config.mia.personalPhone });
+}
+
+// Mirai presionó el suyo → WhatsApp a Piero.
+export function presionarBotonMirai() {
+  return toque({ quien: 'mirai', nombre: 'Piero', leLo: 'lo', destinoPhone: config.piero.phone });
 }

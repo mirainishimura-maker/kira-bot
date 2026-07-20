@@ -23,7 +23,7 @@ import { runMetricas } from './services/mia/metricas.js';
 import { runImperio } from './services/mia/imperio.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 import { startItacaPRCron, chequearPRs } from './services/mia/itacaCorrecciones.js';
-import { presionarBoton } from './services/pieroBoton.js';
+import { presionarBoton, presionarBotonMirai } from './services/pieroBoton.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -344,6 +344,29 @@ app.post('/piero/boton', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[piero/boton] falló:', err);
+    if (plain) return res.status(500).type('text/plain').send('Ups, no le pude avisar 😅 intenta de nuevo en un toque.');
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Botón de Mirai (el sentido inverso): su atajo hace POST aquí con SU token
+// (?t= o header x-mirai-token) → Piero recibe el "está pensando en ti".
+// Necesita PIERO_PHONE para saber a dónde mandar. Con ?plain=1 responde texto
+// plano. Apagado (404) mientras no exista MIRAI_BOTON_TOKEN.
+app.post('/mirai/boton', async (req, res) => {
+  if (!config.piero.miraiBotonToken) return res.status(404).json({ ok: false });
+  const token = req.query.t || req.header('x-mirai-token');
+  if (token !== config.piero.miraiBotonToken) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.piero.phone) return res.status(503).json({ ok: false, error: 'falta PIERO_PHONE' });
+  const plain = req.query.plain === '1' || req.query.plain === 'true';
+  try {
+    const result = await presionarBotonMirai();
+    if (plain) return res.type('text/plain').send(result.mensaje);
+    res.json(result);
+  } catch (err) {
+    console.error('[mirai/boton] falló:', err);
     if (plain) return res.status(500).type('text/plain').send('Ups, no le pude avisar 😅 intenta de nuevo en un toque.');
     res.status(500).json({ ok: false, error: err.message });
   }

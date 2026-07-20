@@ -198,10 +198,14 @@ export const config = {
     };
   })(),
 
-  // Botón de Piero — atajo en su iPhone que hace POST /piero/boton con este
-  // token (propio de él, NUNCA el secreto admin). Sin token la ruta ni existe.
+  // Botón de cariño bidireccional — atajos que hacen POST /piero/boton (Piero →
+  // Mirai) y /mirai/boton (Mirai → Piero). Cada uno con SU token (nunca el
+  // secreto admin); sin token la ruta ni existe. El sentido Mirai → Piero
+  // además necesita el número de Piero (PIERO_PHONE, formato E.164 sin "+").
   piero: {
     botonToken: process.env.PIERO_BOTON_TOKEN || '',
+    miraiBotonToken: process.env.MIRAI_BOTON_TOKEN || '',
+    phone: (process.env.PIERO_PHONE || '').replace(/\D/g, ''),
   },
 
   // NEURA — publicador automático del Instagram @neurapsi2026 (marca anónima de
