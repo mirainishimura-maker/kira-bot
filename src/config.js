@@ -198,6 +198,12 @@ export const config = {
     };
   })(),
 
+  // Botón de Piero — atajo en su iPhone que hace POST /piero/boton con este
+  // token (propio de él, NUNCA el secreto admin). Sin token la ruta ni existe.
+  piero: {
+    botonToken: process.env.PIERO_BOTON_TOKEN || '',
+  },
+
   // NEURA — publicador automático del Instagram @neurapsi2026 (marca anónima de
   // marketing para captar leads a Mia). Separado de Mia. Apagado salvo que esté
   // configurado. Reusa el Supabase de Mirai (mismas credenciales MIRAI_*) para

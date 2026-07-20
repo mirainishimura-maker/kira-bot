@@ -23,6 +23,7 @@ import { runMetricas } from './services/mia/metricas.js';
 import { runImperio } from './services/mia/imperio.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 import { startItacaPRCron, chequearPRs } from './services/mia/itacaCorrecciones.js';
+import { presionarBoton } from './services/pieroBoton.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -322,6 +323,30 @@ app.post('/admin/itaca-prs', async (req, res) => {
   if (!config.mia.enabled) return res.status(400).json({ ok: false, error: 'Mia no habilitada' });
   try { res.json(await chequearPRs()); }
   catch (err) { console.error('[admin/itaca-prs] falló:', err); res.status(500).json({ ok: false, error: err.message }); }
+});
+
+// Botón de Piero: el Atajo de su iPhone hace POST aquí (token propio en ?t= o
+// header x-piero-token — nunca el secreto admin) → Mirai recibe el "está
+// pensando en ti" por WhatsApp y el Atajo le muestra a Piero la respuesta.
+// Con ?plain=1 responde texto plano (más fácil de mostrar en Atajos).
+// Apagado (404) mientras no exista PIERO_BOTON_TOKEN.
+app.post('/piero/boton', async (req, res) => {
+  if (!config.piero.botonToken) return res.status(404).json({ ok: false });
+  const token = req.query.t || req.header('x-piero-token');
+  if (token !== config.piero.botonToken) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  if (!config.mia.enabled) return res.status(503).json({ ok: false, error: 'Mia no habilitada' });
+  const plain = req.query.plain === '1' || req.query.plain === 'true';
+  try {
+    const result = await presionarBoton();
+    if (plain) return res.type('text/plain').send(result.mensaje);
+    res.json(result);
+  } catch (err) {
+    console.error('[piero/boton] falló:', err);
+    if (plain) return res.status(500).type('text/plain').send('Ups, no le pude avisar 😅 intenta de nuevo en un toque.');
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.listen(config.port, () => {
