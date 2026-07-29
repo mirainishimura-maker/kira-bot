@@ -18,6 +18,7 @@ import { startSesionPrepCron, runSesionPrep } from './services/mia/sesionPrep.js
 import { startAgendaSyncCron, runAgendaSync } from './services/mia/agendaSync.js';
 import { startCitasSyncCron, runCitasSync } from './services/mia/citasSync.js';
 import { startGenteCron, runGenteCheck } from './services/mia/gente.js';
+import { startSerumsCron } from './services/mia/serums.js';
 import { startPagosCron, runPagosRecordatorio } from './services/mia/pagosFijos.js';
 import { runMetricas } from './services/mia/metricas.js';
 import { runImperio } from './services/mia/imperio.js';
@@ -411,6 +412,7 @@ app.listen(config.port, () => {
     startGenteCron();
     startPagosCron();
     startItacaPRCron();
+    startSerumsCron();
   }
   // NEURA (publicador de Instagram) — independiente de Mia, se auto-gatea.
   startNeuraCron();
