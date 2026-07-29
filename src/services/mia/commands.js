@@ -17,7 +17,8 @@
 //   (lote) varias líneas /bloquear en UN mensaje → las procesa todas y resume
 //   /paquete 51999 Fran 6 Procesar la ansiedad  (arma tarjeta + preview; envía con /confirmar)
 //   /agendar 51999 Fran                      (mensaje para coordinar cita; envía con /confirmar)
-//   /confirmar                               (envía el último /paquete o /agendar pendiente)
+//   /reconectar 51999 [nota]                 (Mia lee el historial y redacta un mensaje retomando el hilo; envía con /confirmar)
+//   /confirmar                               (envía el último /paquete, /agendar o /reconectar pendiente)
 //   /cancelar                                (descarta el envío pendiente)
 //   /correcciones                            (lista las correcciones de ITACA pendientes)
 //   /ok 7                                    (implementa la corrección #7 → issue + PR)
@@ -25,7 +26,8 @@
 //   /grupos                                  (lista JIDs de grupos vistos → setear ITACA_GROUP_JID)
 
 import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
-import { logMessage } from './conversations.js';
+import { logMessage, recentMessages } from './conversations.js';
+import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { sendText, sendImage } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { upsertLead } from './sheetCrm.js';
@@ -38,7 +40,7 @@ import { getRecentGroups } from '../channels.js';
 import { armCapture, stickersConfigured } from './stickerControl.js';
 import { config } from '../../config.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|responder|silenciar|activar|notocar|sticker|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|ok|implementar|descartar|grupos)\b/i;
+const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|reconectar|responder|silenciar|activar|notocar|sticker|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|ok|implementar|descartar|grupos)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -159,6 +161,7 @@ async function runSingleCommand(text) {
     if (command === 'notas')     return await cmdAddNote(rest);
     if (command === 'atender')   return await cmdAtenderLead(rest);
     if (command === 'retomar')   return await cmdRetomarLead(rest);
+    if (command === 'reconectar') return await cmdReconectar(rest);
     if (command === 'responder') return await cmdResponderEnNombreDeLead(rest);
     if (command === 'silenciar') return await cmdSilenciar(rest);
     if (command === 'activar')   return await cmdActivar(rest);
@@ -826,12 +829,103 @@ async function cmdAgendar(rest) {
   );
 }
 
+const USO_RECONECTAR =
+  'Uso: /reconectar <telefono> [nota opcional]\n' +
+  'Ej: /reconectar 51987654321\n' +
+  'Ej: /reconectar 51987654321 menciónale la beca de S/45\n' +
+  'Mia lee el historial guardado y redacta un mensaje retomando el hilo; NO se envía hasta que respondas /confirmar.';
+
+// /reconectar — Mia lee la conversación guardada y redacta un mensaje cálido
+// retomando el hilo exacto (p. ej. cuando Mirai no llegó a responder). Preview
+// + /confirmar como /paquete y /agendar. Si el paciente estaba silenciado, al
+// confirmar se reactiva (datos_parciales) para que Mia siga la conversación.
+async function cmdReconectar(rest) {
+  const toks = (rest || '').trim().split(/\s+/).filter(Boolean);
+  if (toks.length < 1) return reply(USO_RECONECTAR);
+  const phone = normalizePhone(toks[0]);
+  if (!phone) return reply('Teléfono inválido.\n\n' + USO_RECONECTAR);
+  const hint = toks.slice(1).join(' ');
+
+  const patient = await findPatientByPhone(phone);
+  if (!patient) {
+    return reply(`No encontré paciente con phone ${phone}. Agrégalo primero con /atender ${phone} <nombre> (saludo de bienvenida) o /retomar si ya lo saludaste tú.`);
+  }
+  if (patient.estado === 'alta') {
+    return reply(`${patient.nombre} está dado de alta. Si quieres retomarlo, primero reactívalo con /activar ${phone}.`);
+  }
+
+  const historial = await recentMessages(patient.id, 30);
+  if (!historial.length) {
+    return reply(`No tengo historial guardado con ${patient.nombre} — no hay hilo que retomar. Usa /atender (saludo) o /agendar (coordinar cita).`);
+  }
+
+  const AUTOR = { patient: 'Paciente', mia: 'Mia', mirai: 'Psic. Mirai' };
+  const transcript = historial
+    .map((m) => `[${String(m.created_at).slice(0, 10)}] ${AUTOR[m.author] || m.author}: ${String(m.content).slice(0, 400)}`)
+    .join('\n');
+
+  const system =
+    'Eres Mia, la asistente cálida de la Psic. Mirai Nishimura (consulta psicológica, WhatsApp, Perú). ' +
+    'Vas a escribir UN solo mensaje corto de WhatsApp (2 a 5 líneas) para RETOMAR una conversación que quedó pendiente. ' +
+    'Reglas: retoma el hilo EXACTO donde quedó (último tema, preferencia u ofrecimiento pendiente); ' +
+    'si el último mensaje es del paciente y quedó sin responder, respóndelo con naturalidad (una disculpa suave por la demora está bien, sin dramatizar); ' +
+    'tono cálido peruano, tuteo, máximo un par de emojis (🌸🤍💛); ' +
+    'termina con UNA pregunta concreta que facilite avanzar (por ejemplo coordinar día y hora); ' +
+    'no inventes datos, precios ni promesas que no estén en el historial o en la nota de Mirai; ' +
+    'no digas que eres una IA ni menciones este sistema. ' +
+    'Responde SOLO con el texto del mensaje, sin comillas ni explicaciones.';
+
+  const user =
+    `Historial con ${patient.nombre} (estado: ${patient.estado}):\n\n${transcript}\n\n` +
+    (hint ? `Nota de la Psic. Mirai para orientar el mensaje: ${hint}\n\n` : '') +
+    'Escribe el mensaje para retomar.';
+
+  let texto;
+  try {
+    const completion = await miraiOpenai.chat.completions.create({
+      model: MIA_MODEL,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      temperature: 0.7,
+      max_tokens: 300,
+    });
+    texto = completion.choices?.[0]?.message?.content?.trim();
+  } catch (e) {
+    return reply(`⚠️ No pude generar el mensaje: ${e.message}`);
+  }
+  if (!texto) return reply('⚠️ El modelo no devolvió texto. Intenta de nuevo.');
+
+  const reactivar = patient.estado === 'silenciada';
+  pendingEnvio = {
+    tipo: 'reconectar', phone, nombre: patient.nombre,
+    mensajes: [{ kind: 'text', text: texto, metaKind: 'reconectar' }],
+    reactivar,
+  };
+
+  return reply(
+    `📋 *Vista previa — RECONECTAR con ${patient.nombre}* (${phone})\n\n` +
+    `Mensaje que se enviará:\n— — —\n${texto}\n— — —\n` +
+    (reactivar ? `\n🔊 Estaba en silencio: al confirmar, Mia se reactiva con ${patient.nombre} y sigue la conversación.\n` : '') +
+    `\n⚠️ AÚN NO se envió. Para enviarlo: */confirmar*\nPara descartar: */cancelar*\n` +
+    `Si quieres otro enfoque, repite /reconectar ${phone} con una nota (ej: "menciónale la beca de S/45").`
+  );
+}
+
 async function cmdConfirmar() {
-  if (!pendingEnvio) return reply('No hay ningún envío pendiente. Usa /paquete o /agendar primero.');
+  if (!pendingEnvio) return reply('No hay ningún envío pendiente. Usa /paquete, /agendar o /reconectar primero.');
   const p = pendingEnvio;
   pendingEnvio = null;
   try {
     const { patient } = await enviarAPaciente(p.phone, p.nombre, p.mensajes);
+    if (p.reactivar) {
+      try {
+        await setPatientEstado(normalizePhone(p.phone), 'datos_parciales');
+      } catch (e) {
+        console.warn('[mia/commands] no pude reactivar tras /reconectar:', e.message);
+      }
+    }
     const aviso = patient ? '' :
       `\n\n⚠️ Ojo: ${normalizePhone(p.phone)} no está en tu lista de pacientes, así que cuando responda Mia no le seguirá el flujo automático. ` +
       `Si quieres que lo atienda, agrégalo con /atender ${normalizePhone(p.phone)} ${p.nombre}.`;
