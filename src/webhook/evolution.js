@@ -23,7 +23,8 @@ import {
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, analizarImagenParaMia } from '../services/mia/media.js';
 import { detectLeadNote, handleLeadIntake, handleReferralNote } from '../services/mia/leadIntake.js';
-import { detectOrganicLead, notifyMiraiAboutOrganicLead } from '../services/mia/organicLead.js';
+import { detectOrganicLead, notifyMiraiAboutOrganicLead, notifyMiraiAboutUnidentifiable, parseTestAnsiedad } from '../services/mia/organicLead.js';
+import { setPatientMotivo } from '../services/mia/patients.js';
 import { createLeadAuto, setPatientEstado } from '../services/mia/patients.js';
 import { stickerFingerprint, getStickerAction, consumeCapture } from '../services/mia/stickerControl.js';
 import { nombreValido } from '../services/mia/text.js';
@@ -385,6 +386,12 @@ async function processMessage(data) {
       // Guard: nunca auto-intakear a Mirai ni a operadores (si escribieron algo
       // que no es comando/nota, su mensaje lo ve Mirai en kiramkt — silencio).
       if (!phone || phone === config.mia.personalPhone || config.mia.operatorPhones.includes(phone) || config.mia.referrerPhones.includes(phone)) {
+        // @lid sin número real = posible lead de pauta que se perdería en
+        // silencio → avisar a Mirai (máx. 1 vez/día por chat). Los contactos
+        // identificados (Mirai/operador/referidor) siguen en silencio normal.
+        if (!phone) {
+          notifyMiraiAboutUnidentifiable({ remoteJid, pushName: data?.pushName, text }).catch(() => {});
+        }
         console.log(`[webhook] ${phone || '(@lid sin número)'} = Mirai/operador/referidor o no identificable — silencio.`);
         return;
       }
@@ -403,8 +410,14 @@ async function processMessage(data) {
         return;
       }
       console.log(`[webhook] AUTO-INTAKE | nuevo lead "${pushName ?? ''}" (${phone}) → Mia`);
+      // Lead del test de ansiedad (funnel NEURA): guardar nivel/puntaje en la
+      // ficha para que Mirai lo vea de un vistazo y priorice los niveles altos.
+      const testInfo = parseTestAnsiedad(leadText);
+      if (testInfo) {
+        setPatientMotivo(phone, `Test ansiedad NEURA: nivel ${testInfo.nivel} (${testInfo.puntaje}/21)`).catch(() => {});
+      }
       // Visibilidad: aviso en tiempo real a Mirai de que entró un lead nuevo (dedup 1h interno).
-      notifyMiraiAboutOrganicLead({ phone, pushName, text: leadText }).catch(() => {});
+      notifyMiraiAboutOrganicLead({ phone, pushName, text: leadText, test: testInfo }).catch(() => {});
       enqueueMiaMessage({
         patient: lead,
         text: leadText,

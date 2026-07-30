@@ -152,6 +152,28 @@ export async function setPatientEstado(phone, estado) {
   return data;
 }
 
+// Guarda/actualiza el motivo de consulta en la ficha (ej. el nivel del test
+// de ansiedad con el que llegó el lead del funnel NEURA). Best-effort: si
+// falla, loguea y devuelve null (no rompe el flujo del webhook).
+export async function setPatientMotivo(phone, motivo) {
+  if (!miraiSupabase) return null;
+  const normalized = normalizePhone(phone);
+  if (!normalized || !motivo) return null;
+
+  const { data, error } = await miraiSupabase
+    .from('patients')
+    .update({ motivo })
+    .eq('phone', normalized)
+    .select()
+    .maybeSingle();
+
+  if (error) {
+    console.error('[mia/patients] setPatientMotivo error:', error.message);
+    return null;
+  }
+  return data;
+}
+
 export async function addNoteToPatient(phone, nota) {
   if (!miraiSupabase) throw new Error('Mia no está habilitado');
   const normalized = normalizePhone(phone);
