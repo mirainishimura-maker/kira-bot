@@ -23,7 +23,7 @@ import {
 import { enqueueMiaMessage } from '../services/mia/inbox.js';
 import { transcribeAudio, analizarImagenParaMia } from '../services/mia/media.js';
 import { detectLeadNote, handleLeadIntake, handleReferralNote } from '../services/mia/leadIntake.js';
-import { detectOrganicLead, notifyMiraiAboutOrganicLead, notifyMiraiAboutUnidentifiable, parseTestAnsiedad } from '../services/mia/organicLead.js';
+import { detectOrganicLead, notifyMiraiAboutOrganicLead, notifyMiraiAboutUnidentifiable, notifyMiraiAboutSilentUnknown, parseTestAnsiedad, detectAdReferral } from '../services/mia/organicLead.js';
 import { setPatientMotivo } from '../services/mia/patients.js';
 import { createLeadAuto, setPatientEstado } from '../services/mia/patients.js';
 import { stickerFingerprint, getStickerAction, consumeCapture } from '../services/mia/stickerControl.js';
@@ -396,11 +396,16 @@ async function processMessage(data) {
         return;
       }
       const leadText = await multimodalToText(data);
+      // Si el mensaje viene de un ANUNCIO de Meta es lead con certeza, aunque el
+      // CTA prellene un saludo sin palabras clave.
+      const adRef = detectAdReferral(data);
       // SOLO auto-intake si el mensaje muestra INTENCIÓN de lead (consulta, guía,
-      // ansiedad, cita, precio...). Así Mia NO responde a contactos viejos que
-      // escriben cosas casuales ("hola", "feliz cumple", etc.) — solo a leads reales.
-      if (!leadText || !detectOrganicLead(leadText)) {
-        console.log(`[webhook] ${phone}: sin intención de lead — Mia no responde (silencio).`);
+      // ansiedad, cita, precio...) o viene de un anuncio. Así Mia NO responde a
+      // contactos viejos que escriben cosas casuales ("feliz cumple", etc.) —
+      // pero ya no se pierden en silencio: le avisa a Mirai para que ella decida.
+      if (!leadText || (!adRef && !detectOrganicLead(leadText))) {
+        console.log(`[webhook] ${phone}: sin intención de lead — Mia no responde (aviso a Mirai).`);
+        notifyMiraiAboutSilentUnknown({ phone, pushName: data?.pushName, text: leadText }).catch(() => {});
         return;
       }
       const pushName = data?.pushName ?? null;
@@ -417,7 +422,7 @@ async function processMessage(data) {
         setPatientMotivo(phone, `Test ansiedad NEURA: nivel ${testInfo.nivel} (${testInfo.puntaje}/21)`).catch(() => {});
       }
       // Visibilidad: aviso en tiempo real a Mirai de que entró un lead nuevo (dedup 1h interno).
-      notifyMiraiAboutOrganicLead({ phone, pushName, text: leadText, test: testInfo }).catch(() => {});
+      notifyMiraiAboutOrganicLead({ phone, pushName, text: leadText, test: testInfo, ad: adRef }).catch(() => {});
       enqueueMiaMessage({
         patient: lead,
         text: leadText,

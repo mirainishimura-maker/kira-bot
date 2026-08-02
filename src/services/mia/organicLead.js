@@ -15,7 +15,32 @@ import { sendText } from '../../lib/evolution.js';
 // Keywords que sugieren INTENCIÓN clara de lead (clínicas + de agenda + del
 // embudo de la guía). Se quitaron las genéricas ("ayuda", "info", "atención")
 // para no auto-responder a contactos viejos que escriben cosas casuales.
-const LEAD_KEYWORDS = /\b(consult\w*|sesi[oó]n\w*|terapia\w*|terapeut\w*|psic[oó]log\w*|psicolog\w*|ansiedad\w*|depresi[oó]n|depre\w*|emdr|trauma\w*|autoestima\w*|duelo\w*|p[aá]nico\w*|crisis|agendar|agenda\w*|cita\w*|reserv\w*|precio\w*|costo\w*|cuesta\w*|inversi[oó]n\w*|s[aá]nar\w*|gu[íi]a\w*|ejercicio\w*|estr[eé]s\w*|insomnio\w*)\b/i;
+// 2 ago 2026: se devolvieron "información/informes/info" y se sumó "test"
+// porque el CTA de los anuncios de Meta prellena "¡Hola! Quiero más
+// información" — sin ellas, los leads PAGADOS caían en silencio (caso real:
+// 936838751, 2 ago). El riesgo de contacto viejo se cubre con el aviso a
+// Mirai de más abajo.
+const LEAD_KEYWORDS = /\b(consult\w*|sesi[oó]n\w*|terapia\w*|terapeut\w*|psic[oó]log\w*|psicolog\w*|ansiedad\w*|depresi[oó]n|depre\w*|emdr|trauma\w*|autoestima\w*|duelo\w*|p[aá]nico\w*|crisis|agendar|agenda\w*|cita\w*|reserv\w*|precio\w*|costo\w*|cuesta\w*|inversi[oó]n\w*|s[aá]nar\w*|gu[íi]a\w*|ejercicio\w*|estr[eé]s\w*|insomnio\w*|informaci[oó]n|informes|info|test\w*)\b/i;
+
+// Mensaje que llega desde un ANUNCIO de Meta (click-to-WhatsApp): WhatsApp
+// adjunta la tarjeta del anuncio en contextInfo.externalAdReply / ctwaContext.
+// Si viene de ahí es un lead pagado con certeza — se atiende sin exigir
+// palabras clave (el CTA suele ser un "Hola" pelado).
+export function detectAdReferral(data) {
+  const m = data?.message;
+  if (!m) return null;
+  const ctx = m.extendedTextMessage?.contextInfo
+    ?? m.imageMessage?.contextInfo
+    ?? m.videoMessage?.contextInfo
+    ?? m.contextInfo
+    ?? null;
+  const ad = ctx?.externalAdReply ?? ctx?.ctwaContext ?? null;
+  if (!ad) return null;
+  return {
+    titulo: ad.title ?? ad.sourceUrl ?? 'anuncio',
+    fuente: ad.sourceUrl ?? ad.sourceId ?? null,
+  };
+}
 
 const NOTIFIED_RECENTLY = new Map(); // phone -> expiresAt
 const DEDUP_TTL_MS = 60 * 60 * 1000; // 1h
@@ -59,7 +84,7 @@ function sanitizePushName(pushName) {
   return clean || 'LeadOrganico';
 }
 
-export async function notifyMiraiAboutOrganicLead({ phone, pushName, text, test }) {
+export async function notifyMiraiAboutOrganicLead({ phone, pushName, text, test, ad }) {
   if (!config.mia.personalPhone) return;
   if (wasRecentlyNotified(phone)) {
     console.log(`[mia/organic] ${phone} ya fue notificado en la última hora, saltando.`);
@@ -75,6 +100,8 @@ export async function notifyMiraiAboutOrganicLead({ phone, pushName, text, test 
     titular = test.puntaje >= 15
       ? `🔴 *Lead del TEST — nivel ALTA (${test.puntaje}/21)* — prioridad: dale una mirada pronto. Mia ya lo está atendiendo 🌸`
       : `🧪 *Lead del test de ansiedad* — nivel ${test.nivel} (${test.puntaje}/21). Mia ya lo está atendiendo 🌸`;
+  } else if (ad) {
+    titular = `📣 *Lead desde tu ANUNCIO* ("${String(ad.titulo).slice(0, 60)}") — Mia ya lo está atendiendo 🌸`;
   }
 
   const aviso = [
@@ -93,6 +120,36 @@ export async function notifyMiraiAboutOrganicLead({ phone, pushName, text, test 
     console.log(`[mia/organic] notificado Mirai sobre lead orgánico ${phone} (${pushName})`);
   } catch (err) {
     console.error('[mia/organic] no pude notificar a Mirai:', err.message);
+  }
+}
+
+// Red de seguridad: número DESCONOCIDO que escribe algo sin intención clara
+// de lead (ej. "Hola" pelado). Mia sigue sin responder — pero avisa a Mirai
+// para que ella decida, en vez de perderlo en silencio. Dedup 24h por número.
+const SIN_INTENCION_NOTIFICADO = new Map(); // phone -> expiresAt
+const SIN_INTENCION_TTL_MS = 24 * 60 * 60 * 1000;
+
+export async function notifyMiraiAboutSilentUnknown({ phone, pushName, text }) {
+  if (!config.mia.personalPhone || !phone) return;
+  const exp = SIN_INTENCION_NOTIFICADO.get(phone);
+  if (exp && exp > Date.now()) return;
+  SIN_INTENCION_NOTIFICADO.set(phone, Date.now() + SIN_INTENCION_TTL_MS);
+
+  const snippet = text
+    ? `"${String(text).slice(0, 150).replace(/\n+/g, ' ')}"`
+    : '(sin texto)';
+  const aviso =
+    `🔔 *Número nuevo escribió y no le respondí* (no detecté intención de consulta)\n\n` +
+    `De: ${phone}${pushName ? ` (${pushName})` : ''}\n` +
+    `Escribió: ${snippet}\n\n` +
+    `Si es un lead, lo atiendo con:\n/atender ${phone} ${pushName || '<nombre>'}\n` +
+    `Si no lo es, ignóralo y no te vuelvo a avisar por él hoy 🌸`;
+
+  try {
+    await sendText(`${config.mia.personalPhone}@s.whatsapp.net`, aviso);
+    console.log(`[mia/organic] avisado a Mirai de desconocido sin intención ${phone}`);
+  } catch (err) {
+    console.error('[mia/organic] no pude avisar de desconocido:', err.message);
   }
 }
 
@@ -132,5 +189,8 @@ setInterval(() => {
   }
   for (const [jid, exp] of NO_ID_NOTIFIED.entries()) {
     if (exp < now) NO_ID_NOTIFIED.delete(jid);
+  }
+  for (const [ph, exp] of SIN_INTENCION_NOTIFICADO.entries()) {
+    if (exp < now) SIN_INTENCION_NOTIFICADO.delete(ph);
   }
 }, 10 * 60 * 1000).unref?.();
