@@ -8,6 +8,7 @@ import { miraiSupabase } from '../../lib/miraiSupabase.js';
 import { sendText } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
 import { listUpcomingAppointments } from './calendar.js';
+import { rutinaDeFecha, anticiposDeFecha, ymdLima } from './rutina.js';
 
 function hoyLimaDate() {
   return new Date().toLocaleString('sv-SE', { timeZone: 'America/Lima' }).slice(0, 10); // "2026-07-05"
@@ -56,19 +57,29 @@ export async function runBriefMatutino({ dry = false } = {}) {
     return `   ${ic} ${r.title}${hora}${cada}`;
   });
 
+  // 3) Rutina fija (iglesia + discipulado) del día, y lo que conviene
+  //    anticipar de mañana. Ver rutina.js.
+  const rutinaLines = rutinaDeFecha(ymdLima(0)).map((r) => `   ${r.icono} ${r.texto}`);
+  const manana = anticiposDeFecha(ymdLima(1));
+
+  const hoyLines = [...agendaLines, ...rutinaLines];
+
   const texto = [
     `☀️ *Buenos días, Mirai* — ${fechaLegible()}`,
     '',
     '🗓️ *Hoy:*',
-    agendaLines.length ? agendaLines.join('\n') : '   (sin sesiones agendadas)',
+    hoyLines.length ? hoyLines.join('\n') : '   (día libre ✦)',
     '',
     '📝 *Pendientes:*',
     pendLines.length ? pendLines.join('\n') : '   (nada pendiente ✦)',
+    ...(manana.length
+      ? ['', '🔜 *Mañana:*', manana.map((m) => `   ${m.icono} ${m.texto}`).join('\n')]
+      : []),
     '',
     'Que tengas un lindo día 🌿',
   ].join('\n');
 
-  if (dry) return { ok: true, dry: true, texto, agenda: agendaLines.length, pendientes: pendientes.length };
+  if (dry) return { ok: true, dry: true, texto, agenda: agendaLines.length, rutina: rutinaLines.length, pendientes: pendientes.length };
 
   try {
     const sent = await sendText(`${config.mia.personalPhone}@s.whatsapp.net`, texto);

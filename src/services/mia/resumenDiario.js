@@ -48,15 +48,44 @@ export async function runResumenDiario({ dry = false } = {}) {
     masLeads,
     `💬 Mia atendió a *${atendidos}* persona(s)`,
     `📎 Guías gratis enviadas: *${guias ?? 0}*`,
-    '',
-    'Que descanses 🌸',
   ].filter(Boolean).join('\n');
 
-  if (dry) return { ok: true, dry: true, texto, leads: (nuevos || []).length, atendidos, guias: guias ?? 0 };
+  // Recordatorio de finanzas (decisión del 10 ago 2026): Mirai se olvidaba de
+  // registrar ingresos/egresos, así que el cierre del día se lo pregunta. Va
+  // como mensaje APARTE para que pueda responder por voz y Neura lo registre.
+  // Si ya anotó movimientos hoy, no la molesta: solo confirma y deja la puerta.
+  const { data: movs } = await miraiSupabase
+    .from('finances').select('direction, amount').gte('occurred_at', desde).limit(200);
+  const hechos = movs ?? [];
+  const ingresos = hechos.filter(m => m.direction === 'ingreso').reduce((s, m) => s + Number(m.amount || 0), 0);
+  const egresos  = hechos.filter(m => m.direction === 'egreso').reduce((s, m) => s + Number(m.amount || 0), 0);
+
+  const textoPlata = hechos.length
+    ? [
+        `💰 *Hoy registraste ${hechos.length} movimiento(s)*`,
+        `   ↑ ingresos: S/${ingresos.toFixed(2)}   ↓ gastos: S/${egresos.toFixed(2)}`,
+        '',
+        '¿Se te quedó algo fuera? Dímelo y lo anoto.',
+        '',
+        'Que descanses 🌸',
+      ].join('\n')
+    : [
+        '💰 *¿Cómo te fue con el dinero hoy?*',
+        '',
+        'Cuéntame por voz o texto tus gastos e ingresos del día y los registro.',
+        '',
+        '_Ej: "gasté 20 en taxi y 45 en el mercado, entró 75 de una consulta"_',
+        '',
+        'Que descanses 🌸',
+      ].join('\n');
+
+  if (dry) return { ok: true, dry: true, texto, textoPlata, leads: (nuevos || []).length, atendidos, guias: guias ?? 0, movimientos: hechos.length };
 
   try {
     const sent = await sendText(`${config.mia.personalPhone}@s.whatsapp.net`, texto);
     if (sent?.key?.id) rememberMiaSentId(sent.key.id);
+    const sent2 = await sendText(`${config.mia.personalPhone}@s.whatsapp.net`, textoPlata);
+    if (sent2?.key?.id) rememberMiaSentId(sent2.key.id);
   } catch (e) {
     console.error('[mia/resumen] no pude enviar:', e.message);
     return { ok: false, error: e.message };

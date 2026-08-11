@@ -11,6 +11,7 @@ import { config } from '../../config.js';
 import { sendPrivate } from '../../lib/evolution.js';
 
 const EXAMEN = '2026-08-09';
+const PUNTAJE = '2026-08-14';   // día en que publican el puntaje (dato de Mirai, 10 ago)
 const INICIO = '2026-10-01';
 
 const limaHoy = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
@@ -54,6 +55,11 @@ export async function runSerumsReminder({ dry = false } = {}) {
     texto = '🎓 *SERUMS · mañana es el día*\n\nHoy NO se estudia nada nuevo: repaso suave, buena cena, dormir temprano. Llegas lista — mañana solo vas a mostrar lo que ya entiendes 🌸💛';
   } else if (alExamen === 0) {
     texto = '🎓 *HOY es tu examen* 🌸\n\nRespira: inhala 4, exhala 6. Ya hiciste el trabajo. Entra tranquila, lee con calma y confía en tu forma de entender. Aquí te espero con la razón de tu porqué 💛 ¡Tú puedes!';
+  } else if (dias(hoy, PUNTAJE) > 0) {
+    const f = dias(hoy, PUNTAJE);
+    texto = `📊 *SERUMS · publican tu puntaje en ${f} día${f === 1 ? '' : 's'}* (vie 14 de agosto)\n\n${POST[f % POST.length]}`;
+  } else if (dias(hoy, PUNTAJE) === 0) {
+    texto = '📊 *HOY publican tu puntaje del SERUMS* 🌸\n\nPase lo que pase, el número no te define — es solo el que ordena la fila para elegir plaza. Míralo con calma y me cuentas 💛';
   } else if (alInicio > 0) {
     texto = `🌿 *SERUMS · etapa de espera* (inicio ~1 de octubre, faltan ${alInicio} días)\n\n${POST[alInicio % POST.length]}`;
   } else if (alInicio === 0) {
