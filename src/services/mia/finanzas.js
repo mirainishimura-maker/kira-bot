@@ -17,6 +17,43 @@ const fmt = (n, cur = 'PEN') =>
 
 const clean = (s) => (s || '').trim();
 
+// ─── Costo del consultorio (Mont Sinai) ─────────────────────────────────────
+// Mirai alquila el consultorio por sesión atendida, así que cada sesión tiene
+// un costo que antes no se registraba: su resumen mostraba lo facturado, no lo
+// que de verdad le queda. Con 22 sesiones el gasto acumulado era ~S/805.
+// Tarifa estándar S/35; Fran paga S/40 por hora de consultorio (excepción).
+// Si cambian las tarifas, se editan acá.
+const COSTO_CONSULTORIO_DEFAULT = 35;
+const COSTO_CONSULTORIO_EXCEPCIONES = {
+  '51988647255': 40,   // Fran (contacto: su papá Carlos)
+};
+
+export function costoConsultorio(phone) {
+  const key = String(phone || '').replace(/\D/g, '');
+  return COSTO_CONSULTORIO_EXCEPCIONES[key] ?? COSTO_CONSULTORIO_DEFAULT;
+}
+
+// Registra el alquiler del consultorio de UNA sesión como egreso. Best-effort:
+// si falla, no rompe el guardado de la nota clínica.
+export async function registrarCostoConsultorio({ phone, nombre }) {
+  if (!miraiSupabase) return null;
+  const amount = costoConsultorio(phone);
+  try {
+    const { error } = await miraiSupabase.from('finances').insert({
+      direction: 'gasto', amount, currency: 'PEN',
+      category: 'Consultorio',
+      description: `Consultorio Mont Sinai — sesión${nombre ? ` de ${nombre}` : ''}`,
+      source: 'auto',
+      raw_text: 'Registrado automáticamente al guardar la nota de sesión',
+    });
+    if (error) { console.error('[neura/finanzas] costo consultorio:', error.message); return null; }
+    return amount;
+  } catch (e) {
+    console.error('[neura/finanzas] costo consultorio:', e.message);
+    return null;
+  }
+}
+
 // ─── Cuentas ────────────────────────────────────────────────────────────────
 export async function resolveAccount(name) {
   if (!clean(name)) return { error: '¿Con qué cuenta? (BCP, BBVA, Yape, efectivo…) 🙂' };

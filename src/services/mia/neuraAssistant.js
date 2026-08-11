@@ -32,6 +32,7 @@ import {
   resolveAccount, handleConsultarSaldo, handleAjustarSaldo,
   handleRegistrarDeuda, handleAbonarDeuda, handleConsultarDeudaPersonal,
   handleCrearMeta, handleAportarMeta, handleConsultarMetas, handleConsultarPlan,
+  registrarCostoConsultorio,
 } from './finanzas.js';
 import { handleRegistrarTrabajo, handleConsultarTrabajo, handleReporteGdh } from './trabajo.js';
 import { handleRegistrarPagoFijo, handleConsultarPagosFijos } from './pagosFijos.js';
@@ -575,7 +576,11 @@ async function notaSesion(s, raw) {
   const tarea = s.homework ? `\nTarea: ${s.homework.trim()}` : '';
   const prox = s.next_focus ? `\nPróxima: ${s.next_focus.trim()}` : '';
   const paqLinea = await descontarPaquete(patient.id); // si tiene paquete activo, descuenta 1
-  return { handled: true, reply: `📝 Nota de sesión guardada para ${patient.nombre}.${tarea}${prox}${paqLinea}\nLa ves en Neura → Pacientes ✦` };
+  // Cada sesión atendida cuesta el alquiler del consultorio: se registra solo
+  // para que el resumen de finanzas muestre lo que de verdad le queda.
+  const costo = await registrarCostoConsultorio({ phone: patient.phone, nombre: patient.nombre });
+  const costoLinea = costo ? `\n_Anoté ${money(costo)} de consultorio_` : '';
+  return { handled: true, reply: `📝 Nota de sesión guardada para ${patient.nombre}.${tarea}${prox}${paqLinea}${costoLinea}\nLa ves en Neura → Pacientes ✦` };
 }
 
 // ---- Paquetes de sesiones (4/6 a S/105 c/u) ----
