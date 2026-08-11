@@ -36,6 +36,7 @@ import {
 import { handleRegistrarTrabajo, handleConsultarTrabajo, handleReporteGdh } from './trabajo.js';
 import { handleRegistrarPagoFijo, handleConsultarPagosFijos } from './pagosFijos.js';
 import { contextoCierre, limpiarContextoCierre } from './buenasNoches.js';
+import { addPatient, normalizePhone } from './patients.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -43,7 +44,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "registrar_paciente" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -66,6 +67,7 @@ Formato exacto:
   "diario": { "content": string } | null,
   "habito": { "kind": "agua" | "sueño" | "ejercicio" | "comida" | "descanso" | "disfrute" | "otro", "amount": number | null, "unit": string | null, "note": string | null } | null,
   "persona": { "name": string, "relation": string | null, "phone": string | null, "birthday": string | null } | null,
+  "paciente_nuevo": { "name": string | null, "phone": string | null } | null,
   "contacto": { "person": string } | null,
   "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
   "completar": { "title": string } | null
@@ -133,6 +135,9 @@ Reglas:
 - ESCRIBIR DIARIO: "escribe en mi diario … / querido diario … / anota en mi diario … / en mi diario … / hoy en mi diario …" (una entrada personal, reflexiva, del día) → escribir_diario. diario.content = lo que quiere guardar, tal cual lo dice.
 - CONSULTAR DIARIO: "léeme mi diario / qué escribí en mi diario / mis entradas del diario / mi diario" → consultar_diario.
 - SALUD / HÁBITO / DESCANSO: "tomé X de agua / dormí X horas / hice ejercicio (X min) / comí ... / caminé / hoy descansé / vi una peli / salí a pasear / me di un gusto" → registrar_habito. habito.kind ∈ [agua, sueño, ejercicio, comida, descanso, disfrute, otro]; amount+unit si da cantidad (ej 2 "litros", 6 "horas", 30 "min"); note = detalle.
+- REGISTRAR PACIENTE NUEVA (alguien a quien ATIENDE en consulta, todavía no está en Neura): "registra a Maximina / agrégala como paciente / es nueva, regístrala / da de alta a X / anota a X que es paciente nueva (su número es 999...)" → registrar_paciente. paciente_nuevo.name = el nombre (o null si solo dice "es nueva, regístrala" refiriéndose a alguien que acabas de nombrar); paciente_nuevo.phone = el número si lo da (o null).
+  TAMBIÉN aquí: si el mensaje es SOLO un número de teléfono peruano (9 dígitos, con o sin +51) sin nada más, es el número de la paciente que quedó pendiente de registrar → registrar_paciente con name null y phone = ese número.
+  DIFERENCIA CLAVE con agregar_persona: paciente = alguien que atiende en consulta; persona = un vínculo personal suyo (mamá, pareja, amiga) para que Neura la ayude a cuidarlo.
 - AGREGAR PERSONA: "agrega a mi mamá / registra a mi amiga X / anota a mi pareja Y (cumple el <fecha>, su número es ...)" → agregar_persona. persona.name = nombre; persona.relation = vínculo (mamá, pareja, amiga, hermano...); persona.phone si lo da; persona.birthday = ISO YYYY-MM-DD si la da.
 - CONTACTO YA HECHO (pasado): "llamé a mi mamá / hablé con X / le escribí a Y / vi a Z / almorcé con W" → contacto_persona. contacto.person = a quién. (Ojo: "recuérdame llamar a X" es recordatorio; "agrega a X" es agregar_persona.)
 - ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
@@ -168,21 +173,73 @@ async function classify(text, cierre = null) {
 
 const money = (n) => `S/ ${Number(Math.abs(n)).toFixed(2)}`;
 
+// Paciente que Mirai nombró y todavía no existe en Neura. Lo recordamos para
+// que pueda cerrar el círculo con solo pasar el número ("999888777") o decir
+// "sí, regístrala", en vez de dejarla en un callejón sin salida.
+let pacientePendiente = null;                 // { nombre, expiraMs }
+const PACIENTE_TTL_MS = 30 * 60 * 1000;
+
+function recordarPacienteNuevo(nombre) {
+  pacientePendiente = { nombre, expiraMs: Date.now() + PACIENTE_TTL_MS };
+}
+function pacienteNuevoPendiente() {
+  if (!pacientePendiente) return null;
+  if (pacientePendiente.expiraMs < Date.now()) { pacientePendiente = null; return null; }
+  return pacientePendiente.nombre;
+}
+
 // Resuelve un paciente por nombre (coincidencia parcial). Devuelve { patient }
 // o { error } con un mensaje listo para responderle a Mirai.
 async function resolvePatient(name) {
   if (!name || !name.trim()) return { error: '¿De qué paciente? Dime el nombre 🙂' };
+  const limpio = name.trim();
   const { data } = await miraiSupabase
-    .from('patients').select('id, nombre, phone').ilike('nombre', `%${name.trim()}%`).limit(6);
+    .from('patients').select('id, nombre, phone').ilike('nombre', `%${limpio}%`).limit(6);
   const rows = data ?? [];
-  if (rows.length === 0) return { error: `No encontré a "${name.trim()}" en tus pacientes. ¿Está escrito igual que en Neura?` };
-  if (rows.length > 1) return { error: `Tengo varias que coinciden con "${name.trim()}": ${rows.map((r) => r.nombre).join(', ')}. ¿Cuál? (dime el nombre completo)` };
+  if (rows.length === 0) {
+    // No es un error del que Mirai tenga que salir sola: casi siempre es una
+    // paciente NUEVA. Le ofrecemos registrarla y recordamos el nombre.
+    recordarPacienteNuevo(limpio);
+    return { error: `Todavía no tengo a *${limpio}* en tus pacientes — ¿es nueva? 🌸\n\nPásame su número y la registro al toque (o dime "es nueva" y la creo con lo que tengas).` };
+  }
+  if (rows.length > 1) return { error: `Tengo varias que coinciden con "${limpio}": ${rows.map((r) => r.nombre).join(', ')}. ¿Cuál? (dime el nombre completo)` };
   return { patient: rows[0] };
+}
+
+// Registra una paciente nueva. `phone` puede faltar: en ese caso pedimos el
+// número y dejamos el nombre pendiente para el siguiente mensaje.
+async function registrarPaciente(p, raw) {
+  const nombre = (p?.name || '').trim() || pacienteNuevoPendiente();
+  if (!nombre) return { handled: true, reply: '¿Cómo se llama la paciente que quieres registrar? 🙂' };
+
+  const phone = normalizePhone(p?.phone);
+  if (!phone) {
+    recordarPacienteNuevo(nombre);
+    return { handled: true, reply: `Va, registro a *${nombre}* 😊 Pásame su número de WhatsApp y la dejo lista.` };
+  }
+
+  try {
+    const { duplicated, patient } = await addPatient({ phone, nombre, etiqueta: 'paciente_activo' });
+    pacientePendiente = null;
+    if (duplicated) {
+      return { handled: true, reply: `Ese número ya estaba en tu lista como *${patient?.nombre || nombre}* — no la dupliqué 🙂` };
+    }
+    return { handled: true, reply: `✅ Registré a *${patient.nombre}* (${patient.phone}).\n\nYa puedes dictarme su nota de sesión, su pago o agendarle cita 🌸` };
+  } catch (e) {
+    console.error('[neura] registrar paciente:', e.message);
+    return { handled: true, reply: `Uy, no pude registrarla: ${e.message}. ¿Me pasas el número de nuevo?` };
+  }
 }
 
 // Punto de entrada. { handled:true, reply } si ejecutó algo; { handled:false } si no.
 export async function handleNeuraInstruction(text) {
   if (!miraiOpenai || !miraiSupabase || !text) return { handled: false };
+
+  // Atajo: quedó una paciente pendiente de registrar y Mirai manda SOLO el
+  // número. No hace falta molestar al clasificador para eso.
+  if (/^(?:\+?51)?\s*9\d{2}\s*\d{3}\s*\d{3}$/.test(text.trim()) && pacienteNuevoPendiente()) {
+    return registrarPaciente({ name: null, phone: text }, text);
+  }
 
   const cierre = contextoCierre();
 
@@ -197,6 +254,7 @@ export async function handleNeuraInstruction(text) {
   }
 
   switch (parsed?.intent) {
+    case 'registrar_paciente':   return registrarPaciente(parsed.paciente_nuevo, text);
     case 'registrar_finanza':    return registrarFinanza(parsed.finanza, text);
     case 'agregar_recordatorio': return agregarRecordatorio(parsed.recordatorio, text);
     case 'completar_recordatorio': return completarRecordatorio(parsed.completar);
