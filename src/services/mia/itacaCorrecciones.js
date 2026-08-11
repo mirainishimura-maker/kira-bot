@@ -325,7 +325,10 @@ export async function aprobarPR(id = null) {
     return `⚠️ No pude hacer el merge del PR #${t.pr_number}: ${r.error}\n\nPuedes hacerlo a mano acá:\n${t.pr_url || ''}`;
   }
 
-  await updateTicket(t.id, { estado: 'en_produccion' });
+  // OJO: se queda en 'pr_abierto' a propósito. El cron (cada 3 min) ve el PR
+  // ya mergeado y es quien manda el "ya está en producción". Si lo marcáramos
+  // aquí, el cron dejaría de verlo y ese aviso —que acabamos de prometer—
+  // nunca llegaría.
   return `✅ Listo, aprobé la corrección #${t.id} ("${t.titulo}").\n\nRailway ya está desplegando — te aviso cuando esté arriba 🚀`;
 }
 
