@@ -27,7 +27,7 @@ import { runGdhRecap } from './gdhRecap.js';
 import { handleReflexion } from './reflexion.js';
 import { handleReporte } from './reporte.js';
 import { enviarReportePdf } from './reportePdf.js';
-import { buildResumenFinanzas } from './resumenFinanzas.js';
+import { buildResumenFinanzas, deudoresPacientes } from './resumenFinanzas.js';
 import {
   resolveAccount, handleConsultarSaldo, handleAjustarSaldo,
   handleRegistrarDeuda, handleAbonarDeuda, handleConsultarDeudaPersonal,
@@ -562,19 +562,9 @@ async function registrarCargo(c, raw) {
 }
 
 async function consultarDeudas() {
-  const [pRes, cRes, payRes] = await Promise.all([
-    miraiSupabase.from('patients').select('id, nombre').neq('phone', '51904301391'),
-    miraiSupabase.from('charges').select('patient_id, amount'),
-    miraiSupabase.from('payments').select('patient_id, amount'),
-  ]);
-  const bal = new Map();
-  for (const c of cRes.data ?? []) bal.set(c.patient_id, (bal.get(c.patient_id) || 0) + Number(c.amount || 0));
-  for (const p of payRes.data ?? []) bal.set(p.patient_id, (bal.get(p.patient_id) || 0) - Number(p.amount || 0));
-  const nameOf = new Map((pRes.data ?? []).map((p) => [p.id, p.nombre]));
-  const deudores = [...bal.entries()].filter(([id, v]) => v > 0.5 && nameOf.has(id)).sort((a, b) => b[1] - a[1]);
+  const { deudores, total } = await deudoresPacientes();
   if (!deudores.length) return { handled: true, reply: '✅ ¡Nadie te debe! Todos tus pacientes están al día 🎉' };
-  const lines = deudores.map(([id, v]) => `• ${nameOf.get(id)}: *${money(v)}*`).join('\n');
-  const total = deudores.reduce((a, [, v]) => a + v, 0);
+  const lines = deudores.map((d) => `• ${d.nombre}: *${money(d.saldo)}*`).join('\n');
   return { handled: true, reply: `🧾 *Quién te debe:*\n${lines}\n\nTotal por cobrar: *${money(total)}* ✦` };
 }
 

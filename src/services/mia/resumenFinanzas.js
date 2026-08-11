@@ -16,17 +16,40 @@ function sinceISO(period) {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 }
 
+// Pacientes con saldo a favor de Mirai = cargos − pagos. Vive aquí (y no en
+// neuraAssistant) para que lo usen tanto "¿quién me debe?" como el resumen
+// dominical, sin duplicar el cálculo.
+export async function deudoresPacientes() {
+  if (!miraiSupabase) return { deudores: [], total: 0 };
+  const [pRes, cRes, payRes] = await Promise.all([
+    miraiSupabase.from('patients').select('id, nombre').neq('phone', config.mia.personalPhone),
+    miraiSupabase.from('charges').select('patient_id, amount'),
+    miraiSupabase.from('payments').select('patient_id, amount'),
+  ]);
+  const bal = new Map();
+  for (const c of cRes.data ?? []) bal.set(c.patient_id, (bal.get(c.patient_id) || 0) + Number(c.amount || 0));
+  for (const p of payRes.data ?? []) bal.set(p.patient_id, (bal.get(p.patient_id) || 0) - Number(p.amount || 0));
+  const nameOf = new Map((pRes.data ?? []).map((p) => [p.id, p.nombre]));
+  const deudores = [...bal.entries()]
+    .filter(([id, v]) => v > 0.5 && nameOf.has(id))
+    .sort((a, b) => b[1] - a[1])
+    .map(([id, v]) => ({ id, nombre: nameOf.get(id), saldo: v }));
+  return { deudores, total: deudores.reduce((a, d) => a + d.saldo, 0) };
+}
+
 export async function buildResumenFinanzas({ period = 'semana' } = {}) {
   if (!miraiSupabase) return 'No tengo tus finanzas conectadas ahora mismo.';
   const since = sinceISO(period);
   const label = period === 'mes' ? 'este mes' : 'esta semana';
 
-  const [finRes, payRes] = await Promise.all([
+  const [finRes, payRes, cobrar] = await Promise.all([
     miraiSupabase.from('finances').select('direction, amount, category').gte('occurred_at', since).limit(2000),
     miraiSupabase.from('payments').select('amount').gte('created_at', since).limit(2000),
+    deudoresPacientes(),
   ]);
   const fin = finRes.data ?? [];
   const pays = payRes.data ?? [];
+  const cobrarLines = cobrar.deudores.slice(0, 6).map((d) => `• ${d.nombre}: ${money(d.saldo)}`).join('\n');
 
   const gastos = fin.filter((f) => f.direction === 'gasto');
   const ingresos = fin.filter((f) => f.direction === 'ingreso');
@@ -42,7 +65,7 @@ export async function buildResumenFinanzas({ period = 'semana' } = {}) {
   const cats = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
   const catLines = cats.length ? cats.map(([c, v]) => `• ${c}: ${money(v)}`).join('\n') : '• (sin gastos)';
 
-  if (fin.length === 0 && pays.length === 0) {
+  if (fin.length === 0 && pays.length === 0 && !cobrar.deudores.length) {
     return `💸 *Tu plata — ${label}*\n\nNo registraste movimientos ${label}. Cuando gastes algo dime "gasté 20 en el taxi" y lo anoto 🙂`;
   }
 
@@ -52,6 +75,9 @@ export async function buildResumenFinanzas({ period = 'semana' } = {}) {
     `Gastos por categoría:\n${catLines}`,
     `Ingresos personales registrados: ${money(totalIngreso)}`,
     `Facturado en el consultorio (pagos de pacientes): ${money(facturado)} en ${pays.length} pagos`,
+    cobrar.deudores.length
+      ? `Pacientes que deben (saldo por cobrar, total ${money(cobrar.total)}):\n${cobrarLines}`
+      : 'Pacientes que deben: nadie, todos al día.',
   ].join('\n');
 
   if (anthropic) {
@@ -59,7 +85,7 @@ export async function buildResumenFinanzas({ period = 'semana' } = {}) {
       const resp = await anthropic.messages.create({
         model: CLAUDE_MODEL,
         max_tokens: 550,
-        system: `Eres Neura, la asistente de Mirai (psicóloga en Perú). Te paso sus números de plata de ${label}. Devuelve un resumen CORTO, cálido y claro en formato WhatsApp (usa *negritas*), en soles (S/). Estructura: un título con emoji; en qué se le fue la plata (las 2-3 categorías top); cuánto facturó en el consultorio; y CIERRA con UN solo consejo práctico y amable (nada de sermones). Máximo ~10 líneas. NO inventes cifras: usa solo las que te doy. Si algo es 0, no lo fuerces.`,
+        system: `Eres Neura, la asistente de Mirai (psicóloga en Perú). Te paso sus números de plata de ${label}. Devuelve un resumen CORTO, cálido y claro en formato WhatsApp (usa *negritas*), en soles (S/). Estructura: un título con emoji; en qué se le fue la plata (las 2-3 categorías top); cuánto facturó en el consultorio; si hay pacientes con saldo por cobrar, nómbralos con su monto y el total (es plata que ya trabajó y no ha entrado); y CIERRA con UN solo consejo práctico y amable (nada de sermones). Máximo ~12 líneas. NO inventes cifras: usa solo las que te doy. Si algo es 0, no lo fuerces.`,
         messages: [{ role: 'user', content: datos }],
       });
       const txt = (resp.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
@@ -68,7 +94,10 @@ export async function buildResumenFinanzas({ period = 'semana' } = {}) {
   }
 
   const top = cats.slice(0, 3).map(([c, v]) => `${c} (${money(v)})`).join(', ');
-  return `💸 *Tu plata — ${label}*\n\nGastaste *${money(totalGasto)}*${top ? ` — sobre todo en ${top}` : ''}.\nFacturaste *${money(facturado)}* en el consultorio (${pays.length} pagos).\n\nDetalle de gastos:\n${catLines}\n\nLo ves en Neura → Finanzas ✦`;
+  const bloqueCobrar = cobrar.deudores.length
+    ? `\n\n🧾 *Por cobrar* (${money(cobrar.total)}):\n${cobrarLines}`
+    : '';
+  return `💸 *Tu plata — ${label}*\n\nGastaste *${money(totalGasto)}*${top ? ` — sobre todo en ${top}` : ''}.\nFacturaste *${money(facturado)}* en el consultorio (${pays.length} pagos).\n\nDetalle de gastos:\n${catLines}${bloqueCobrar}\n\nLo ves en Neura → Finanzas ✦`;
 }
 
 export async function runResumenFinanzas({ dry = false } = {}) {
