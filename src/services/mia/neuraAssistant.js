@@ -126,7 +126,7 @@ Reglas:
   DIFERENCIA CLAVE: "recuérdame X" es agregar_recordatorio; "agéndame/cítala a X" con un PACIENTE es agendar_cita; bloquear_agenda es cuando Mirai tapa SU propio tiempo para que Mia NO ofrezca esos turnos.
 - QUITAR BLOQUEO: "quita/saca el bloqueo de <día/hora> / desbloquea <...> / vuelve a abrir mi agenda el <...> / ya estoy disponible el <...>" → desbloquear_agenda. bloqueo.start_iso / bloqueo.end_iso igual que en bloquear_agenda.
 - CONSULTAR BLOQUEOS: "qué tengo bloqueado / muéstrame mis bloqueos / cuándo no estoy disponible / mis bloqueos" → consultar_bloqueos.
-- CONSULTAR PACIENTE: "qué trabajé/vi con X / cómo va X / cuánto me debe X / cuándo veo a X / cuándo es la cita de X" → consultar_paciente. consulta_paciente.patient_name; aspecto = "sesion" | "saldo" | "cita" | "todo".
+- CONSULTAR PACIENTE: "qué trabajé/vi con X / cómo va X / cuánto me debe X / cuánto ha invertido X / en qué sesión va X / cuántas sesiones lleva X / cuándo veo a X / cuándo es la cita de X" → consultar_paciente. consulta_paciente.patient_name; aspecto = "sesion" | "saldo" | "cita" | "todo". La respuesta ya trae número de sesión e invertido, así que NUNCA le pidas esos datos a Mirai: están en el sistema.
 - CREAR PAQUETE DE SESIONES: "X compró un paquete de 6 / véndele un paquete de 4 a X / arma un paquete de 6 sesiones para X / X se llevó el paquete de 4" → crear_paquete. paquete.patient_name = paciente; paquete.sessions = número de sesiones del paquete (4, 6, u otro; si no lo dice, null).
 - CONSULTAR PAQUETE: "cuántas sesiones le quedan a X / cómo va el paquete de X / le quedan sesiones a X / el paquete de X" → consultar_paquete. paquete.patient_name = paciente.
 - GUARDAR NOTA: "apunta que / anota que / recuerda que <DATO> / guarda que / agrega X a la lista de Y" (un DATO o ítem SIN hora ni acción por hacer; NO es recordatorio) → guardar_nota. nota.content = el dato tal cual; nota.topic = tema en 1-2 palabras (ej "wifi", "lista de compras").
@@ -138,6 +138,7 @@ Reglas:
 - CONSULTAR DIARIO: "léeme mi diario / qué escribí en mi diario / mis entradas del diario / mi diario" → consultar_diario.
 - SALUD / HÁBITO / DESCANSO: "tomé X de agua / dormí X horas / hice ejercicio (X min) / comí ... / caminé / hoy descansé / vi una peli / salí a pasear / me di un gusto" → registrar_habito. habito.kind ∈ [agua, sueño, ejercicio, comida, descanso, disfrute, otro]; amount+unit si da cantidad (ej 2 "litros", 6 "horas", 30 "min"); note = detalle.
 - LISTAR PACIENTES (los que ve EN CONSULTA, para darles seguimiento): "dime mis pacientes / qué pacientes tengo / lista de pacientes / mis pacientes activos / a quiénes estoy viendo / cuántos pacientes tengo" → listar_pacientes con listado.tipo = "pacientes".
+  TAMBIÉN es listar_pacientes cuando pide el CUADRO de todos: "hazme el cuadro de mis pacientes / dime en qué sesión va cada uno / cuánto ha invertido cada paciente / el resumen de todos mis pacientes / cuántas sesiones lleva cada uno". La lista ya trae número de sesión y lo invertido — NUNCA le preguntes quiénes son sus pacientes, eso ya está en el sistema.
   LISTAR LEADS (gente que le escribió pero NO es paciente): "cuántos leads tengo / mis leads / los de la campaña / los que llegaron por la pauta / los que me derivó Mont Sinai / los orgánicos" → listar_pacientes con listado.tipo = "leads" y listado.origen = "campaña" (pauta/publicidad/anuncio), "montsinai" (derivados de la clínica), "organico" (escribieron por su cuenta), o null si pide todos.
   OJO: paciente ≠ lead ≠ silenciada. Si pregunta por PACIENTES nunca devuelvas leads.
 - MARCAR COMO PACIENTE (un lead que ya empezó consulta): "X ya es mi paciente / marca a X como paciente / X pasó a consulta / ya estoy viendo a X" → marcar_paciente. marcar.name = el nombre; marcar.es_paciente = true. Si dice lo contrario ("X ya no es mi paciente / sácala de pacientes / dale de baja de mi lista"), es_paciente = false.
@@ -221,11 +222,17 @@ async function listarPacientes(l) {
     if (!rows.length) {
       return { handled: true, reply: 'Todavía no tienes a nadie marcado como paciente 🌸\n\nDime "X ya es mi paciente" y la agrego a tu lista de seguimiento.' };
     }
+    // El cuadro que pide Mirai: en qué sesión va cada una y cuánto lleva
+    // invertido en su proceso. Todo en una burbuja, para leerlo de un vistazo.
     const lines = rows.map((p) => {
-      const ses = p.sesiones ? ` · ${p.sesiones} sesión${p.sesiones === 1 ? '' : 'es'}` : '';
-      return `• *${p.nombre}*${ses}${p.en_pausa ? ' · _en pausa_' : ''}`;
+      const ses = p.sesiones ? `sesión ${p.sesiones}` : 'sin sesiones aún';
+      const inv = p.invertido ? ` · ${money(p.invertido)} invertido` : '';
+      const debe = p.debe > 0.5 ? ` · ⚠️ debe ${money(p.debe)}` : '';
+      return `• *${p.nombre}* — ${ses}${inv}${debe}${p.en_pausa ? ' · _en pausa_' : ''}`;
     });
-    return { handled: true, reply: `🩺 *Tus pacientes* (${rows.length}):\n${lines.join('\n')}` };
+    const totalInv = rows.reduce((a, p) => a + p.invertido, 0);
+    const pie = totalInv ? `\n\nTotal invertido por tus pacientes: *${money(totalInv)}*` : '';
+    return { handled: true, reply: `🩺 *Tus pacientes* (${rows.length}):\n${lines.join('\n')}${pie}` };
   }
 
   const origen = ['campaña', 'montsinai', 'organico'].includes(l?.origen) ? l.origen : null;
@@ -776,12 +783,18 @@ async function consultarPaciente(cp) {
   if (!cp || !cp.patient_name) return { handled: false };
   const { patient, error } = await resolvePatient(cp.patient_name);
   if (error) return { handled: true, reply: error };
-  const [sesRes, saldo, upc] = await Promise.all([
+  const [sesRes, todasRes, pagRes, saldo, upc] = await Promise.all([
     miraiSupabase.from('sessions').select('summary, homework, next_focus').eq('patient_id', patient.id).order('created_at', { ascending: false }).limit(1),
+    miraiSupabase.from('sessions').select('id', { count: 'exact', head: true }).eq('patient_id', patient.id),
+    miraiSupabase.from('payments').select('amount').eq('patient_id', patient.id),
     balancePaciente(patient.id),
     patient.phone && isCalendarEnabled() ? getUpcoming({ phone: patient.phone }) : Promise.resolve({ hasAppointment: false }),
   ]);
+  const nSesiones = todasRes.count ?? 0;
+  const invertido = (pagRes.data ?? []).reduce((a, x) => a + Number(x.amount || 0), 0);
+
   const partes = [`👤 *${patient.nombre}*`];
+  partes.push(`*Va en la sesión:* ${nSesiones || '—'}${invertido ? ` · *invertido:* ${money(invertido)}` : ''}`);
   const s = sesRes.data?.[0];
   if (s?.summary) {
     partes.push(`*Última sesión:* ${s.summary}`);

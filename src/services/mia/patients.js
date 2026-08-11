@@ -114,11 +114,13 @@ export const ETIQUETAS_LEAD = {
 // marca, para que sepa a quién atiende ella a mano.
 export async function listPacientesActivos() {
   if (!miraiSupabase) return [];
-  const [pRes, sRes] = await Promise.all([
+  const [pRes, sRes, payRes, chRes] = await Promise.all([
     miraiSupabase.from('patients')
       .select('id, nombre, phone, etiqueta, estado')
       .in('etiqueta', ETIQUETAS_PACIENTE).neq('estado', 'alta'),
     miraiSupabase.from('sessions').select('patient_id, session_date, created_at'),
+    miraiSupabase.from('payments').select('patient_id, amount'),
+    miraiSupabase.from('charges').select('patient_id, amount'),
   ]);
 
   const sesiones = new Map();   // id → { n, ultima }
@@ -129,18 +131,29 @@ export async function listPacientesActivos() {
     if (f && (!cur.ultima || f > cur.ultima)) cur.ultima = f;
     sesiones.set(s.patient_id, cur);
   }
+  const invertido = new Map();  // lo que ya PAGÓ en su proceso
+  for (const p of payRes.data ?? []) {
+    invertido.set(p.patient_id, (invertido.get(p.patient_id) || 0) + Number(p.amount || 0));
+  }
+  const cargos = new Map();     // lo que se le cobró (para el saldo)
+  for (const c of chRes.data ?? []) {
+    cargos.set(c.patient_id, (cargos.get(c.patient_id) || 0) + Number(c.amount || 0));
+  }
 
   const miNumero = normalizePhone(config.mia.personalPhone);
   return (pRes.data ?? [])
     .filter((p) => normalizePhone(p.phone) !== miNumero)
     .map((p) => {
       const s = sesiones.get(p.id);
+      const pagado = invertido.get(p.id) ?? 0;
       return {
         nombre: p.nombre,
         phone: p.phone,
         estado: p.estado,
         sesiones: s?.n ?? 0,
         ultima_sesion: s?.ultima ?? null,
+        invertido: pagado,
+        debe: Math.max(0, (cargos.get(p.id) ?? 0) - pagado),
         en_pausa: p.estado === 'silenciada',
       };
     })
