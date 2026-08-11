@@ -22,7 +22,7 @@ import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { sendText, fetchMessageMediaBase64 } from '../../lib/evolution.js';
 import { transcribeAudio } from './media.js';
 import { rememberMiaSentId } from './echoTracker.js';
-import { createIssue, findLinkedPR, getPR, githubReady, findClaudeBranch, createPR } from '../../lib/github.js';
+import { createIssue, findLinkedPR, getPR, githubReady, findClaudeBranch, createPR, mergePR } from '../../lib/github.js';
 import { config } from '../../config.js';
 
 const TABLE = 'itaca_correcciones';
@@ -278,6 +278,42 @@ export async function aprobarCorreccion(id) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Merge del PR desde el chat. Antes Mirai tenía que abrir GitHub en el celular
+// y darle al botón; ahora basta con que responda "apruebo" al aviso. Si hay
+// varios PR esperando, pregunta cuál (nunca adivina qué código va a producción).
+// ---------------------------------------------------------------------------
+export async function aprobarPR(id = null) {
+  if (!githubReady()) return 'No tengo configurado el acceso a GitHub para hacer el merge.';
+  if (!miraiSupabase) return 'No tengo la base de correcciones conectada ahora mismo.';
+
+  const { data } = await miraiSupabase.from(TABLE).select('*').eq('estado', 'pr_abierto');
+  const pendientes = (data ?? []).filter((t) => t.pr_number);
+  if (!pendientes.length) return 'No tienes ningún PR esperando aprobación ahora mismo 🙂';
+
+  let t;
+  if (id) {
+    t = pendientes.find((x) => String(x.id) === String(id));
+    if (!t) return `La corrección #${id} no tiene un PR esperando. Pendientes: ${pendientes.map((x) => `#${x.id}`).join(', ')}.`;
+  } else if (pendientes.length > 1) {
+    const lista = pendientes.map((x) => `• #${x.id} — ${x.titulo}`).join('\n');
+    return `Tengo ${pendientes.length} PR esperando. ¿Cuál apruebo?\n${lista}\n\nDime por ejemplo "apruebo la #${pendientes[0].id}".`;
+  } else {
+    t = pendientes[0];
+  }
+
+  const r = await mergePR(t.pr_number, { title: t.titulo });
+  if (!r.ok) {
+    const pista = /403|permission/i.test(r.error)
+      ? '\n\nProbablemente al *GITHUB_TOKEN* le falta el permiso *Contents: Read and write*.'
+      : '';
+    return `⚠️ No pude hacer el merge del PR #${t.pr_number}: ${r.error}${pista}\n\nPuedes hacerlo a mano acá:\n${t.pr_url || ''}`;
+  }
+
+  await updateTicket(t.id, { estado: 'en_produccion' });
+  return `✅ Listo, aprobé la corrección #${t.id} ("${t.titulo}").\n\nRailway ya está desplegando — te aviso cuando esté arriba 🚀`;
+}
+
 export async function descartarCorreccion(id) {
   const t = await getTicket(id);
   if (!t) return `No encontré la corrección #${id}.`;
@@ -372,7 +408,7 @@ export async function chequearPRs() {
 
     if (t.estado === 'en_progreso') {
       await updateTicket(t.id, { estado: 'pr_abierto', pr_number: pr.number, pr_url: pr.url });
-      await avisarMirai(`🔧 *Corrección #${t.id} implementada* ("${t.titulo}").\nRevisa y aprueba el PR desde tu celular:\n${pr.url}\n\nCuando lo apruebes (merge), Railway despliega y te aviso.`);
+      await avisarMirai(`🔧 *Corrección #${t.id} implementada* ("${t.titulo}").\n\nPuedes revisar el código acá:\n${pr.url}\n\n👉 Cuando quieras, respóndeme *"apruebo"* y yo hago el merge — Railway despliega solo y te aviso.`);
       notified++;
       continue;
     }

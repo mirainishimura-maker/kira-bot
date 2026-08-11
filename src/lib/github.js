@@ -155,3 +155,23 @@ export async function getPR(number) {
     return null;
   }
 }
+
+// Hace merge de un PR (lo que Mirai hacía a mano desde el celular).
+// Requiere que el GITHUB_TOKEN tenga "Pull requests: Read and write" y
+// "Contents: Read and write". → { ok, merged } | { ok:false, error }
+export async function mergePR(number, { title } = {}) {
+  const c = itacaCfg();
+  try {
+    const data = await gh(`/repos/${c.repo}/pulls/${number}/merge`, {
+      method: 'PUT',
+      body: {
+        merge_method: 'squash',
+        commit_title: title ? `${title} (#${number})` : undefined,
+      },
+    });
+    return { ok: true, merged: Boolean(data?.merged), sha: data?.sha };
+  } catch (err) {
+    console.error('[github] mergePR error:', err.message);
+    return { ok: false, error: err.message };
+  }
+}

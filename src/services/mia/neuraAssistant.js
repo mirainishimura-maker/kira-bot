@@ -37,6 +37,7 @@ import { handleRegistrarTrabajo, handleConsultarTrabajo, handleReporteGdh } from
 import { handleRegistrarPagoFijo, handleConsultarPagosFijos } from './pagosFijos.js';
 import { contextoCierre, limpiarContextoCierre } from './buenasNoches.js';
 import { addPatient, normalizePhone, listPacientesActivos, listLeads, marcarComoPaciente } from './patients.js';
+import { aprobarPR } from './itacaCorrecciones.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -44,7 +45,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "listar_pacientes" | "marcar_paciente" | "registrar_paciente" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "aprobar_pr" | "listar_pacientes" | "marcar_paciente" | "registrar_paciente" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -70,6 +71,7 @@ Formato exacto:
   "paciente_nuevo": { "name": string | null, "phone": string | null } | null,
   "listado": { "tipo": "pacientes" | "leads", "origen": "campaña" | "montsinai" | "organico" | null } | null,
   "marcar": { "name": string, "es_paciente": boolean } | null,
+  "pr": { "id": number | null } | null,
   "contacto": { "person": string } | null,
   "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
   "completar": { "title": string } | null
@@ -137,6 +139,8 @@ Reglas:
 - ESCRIBIR DIARIO: "escribe en mi diario … / querido diario … / anota en mi diario … / en mi diario … / hoy en mi diario …" (una entrada personal, reflexiva, del día) → escribir_diario. diario.content = lo que quiere guardar, tal cual lo dice.
 - CONSULTAR DIARIO: "léeme mi diario / qué escribí en mi diario / mis entradas del diario / mi diario" → consultar_diario.
 - SALUD / HÁBITO / DESCANSO: "tomé X de agua / dormí X horas / hice ejercicio (X min) / comí ... / caminé / hoy descansé / vi una peli / salí a pasear / me di un gusto" → registrar_habito. habito.kind ∈ [agua, sueño, ejercicio, comida, descanso, disfrute, otro]; amount+unit si da cantidad (ej 2 "litros", 6 "horas", 30 "min"); note = detalle.
+- APROBAR EL PR DE UNA CORRECCIÓN DE ITACA (Mirai responde al aviso de que hay código listo): "apruebo / aprobado / apruébalo / dale merge / merge / hazle merge / ya está, súbelo / mándalo a producción / dale / ok apruebo la #3" → aprobar_pr. pr.id = el número de corrección si lo menciona ("la #3"), si no null.
+  OJO: esto es SOLO para el flujo de correcciones de ITACA. Un "ok" o "dale" suelto que no venga a cuento de un PR NO es aprobar_pr.
 - LISTAR PACIENTES (los que ve EN CONSULTA, para darles seguimiento): "dime mis pacientes / qué pacientes tengo / lista de pacientes / mis pacientes activos / a quiénes estoy viendo / cuántos pacientes tengo" → listar_pacientes con listado.tipo = "pacientes".
   TAMBIÉN es listar_pacientes cuando pide el CUADRO de todos: "hazme el cuadro de mis pacientes / dime en qué sesión va cada uno / cuánto ha invertido cada paciente / el resumen de todos mis pacientes / cuántas sesiones lleva cada uno". La lista ya trae número de sesión y lo invertido — NUNCA le preguntes quiénes son sus pacientes, eso ya está en el sistema.
   LISTAR LEADS (gente que le escribió pero NO es paciente): "cuántos leads tengo / mis leads / los de la campaña / los que llegaron por la pauta / los que me derivó Mont Sinai / los orgánicos" → listar_pacientes con listado.tipo = "leads" y listado.origen = "campaña" (pauta/publicidad/anuncio), "montsinai" (derivados de la clínica), "organico" (escribieron por su cuenta), o null si pide todos.
@@ -311,6 +315,7 @@ export async function handleNeuraInstruction(text) {
   }
 
   switch (parsed?.intent) {
+    case 'aprobar_pr':           return { handled: true, reply: await aprobarPR(parsed.pr?.id ?? null) };
     case 'listar_pacientes':     return listarPacientes(parsed.listado);
     case 'marcar_paciente':      return marcarPaciente(parsed.marcar);
     case 'registrar_paciente':   return registrarPaciente(parsed.paciente_nuevo, text);
