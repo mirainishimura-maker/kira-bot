@@ -100,9 +100,12 @@ export async function registrarPagoDeChat({ patientId, phone, refId, monto, veri
     return { status: 'error' };
   }
 
-  // Quien paga es paciente REAL: promover la etiqueta para que el panel (y el
-  // resto del sistema) deje de tratarlo como lead. El estado no se toca
-  // (respetamos silencios/altas).
+  // Quien paga deja de ser un lead frío: se promueve a 'paciente_activo' para
+  // que el panel no lo trate como lead. OJO: eso NO lo vuelve "paciente en
+  // proceso" — esa lista (etiqueta 'paciente', la que ve Mirai en /pacientes)
+  // se marca a mano, porque pagar una primera consulta no es llevar proceso, y
+  // porque aquí también caen clínicas e instituciones que le yapean.
+  // El estado no se toca (respetamos silencios/altas).
   try {
     await miraiSupabase.from('patients')
       .update({ etiqueta: 'paciente_activo' })

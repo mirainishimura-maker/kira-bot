@@ -41,7 +41,7 @@ export async function addPatient({ phone, nombre, etiqueta }) {
     .insert({
       phone: normalized,
       nombre: nombre.trim(),
-      etiqueta: etiqueta?.trim() || 'paciente_activo',
+      etiqueta: etiqueta?.trim() || 'paciente',
       estado: 'nuevo',
     })
     .select()
@@ -97,7 +97,12 @@ export async function createLeadAuto({ phone, nombre }) {
 //
 // La `etiqueta` es la fuente de verdad de la CATEGORÍA, y el `estado` la del
 // momento conversacional. Nunca mezclarlos al listar.
-export const ETIQUETAS_PACIENTE = ['paciente', 'paciente_activo', 'consultorio'];
+// UNA sola etiqueta explícita. Las históricas ('paciente_activo',
+// 'consultorio') NO cuentan a propósito: se pusieron solas al crear contactos
+// y quedaron en gente que no es paciente (la pareja de Mirai, clínicas,
+// placeholders). Ser paciente ahora se marca a mano — con /espaciente o
+// diciéndole a Mia "X ya es mi paciente".
+export const ETIQUETAS_PACIENTE = ['paciente'];
 export const ETIQUETAS_LEAD = {
   campaña:   'lead_campaña',
   montsinai: 'lead_montsinai',

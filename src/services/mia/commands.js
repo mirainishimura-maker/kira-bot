@@ -274,7 +274,7 @@ async function cmdAddPatient(rest) {
     nombre = tokens.slice(1, -1).join(' ');
   } else {
     nombre = tokens.slice(1).join(' ');
-    etiqueta = 'paciente_activo';
+    etiqueta = 'paciente';   // registrarla a mano SÍ la marca como paciente en proceso
   }
 
   const result = await addPatient({ phone, nombre, etiqueta });

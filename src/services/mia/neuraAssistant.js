@@ -269,7 +269,7 @@ async function registrarPaciente(p, raw) {
   }
 
   try {
-    const { duplicated, patient } = await addPatient({ phone, nombre, etiqueta: 'paciente_activo' });
+    const { duplicated, patient } = await addPatient({ phone, nombre, etiqueta: 'paciente' });
     pacientePendiente = null;
     if (duplicated) {
       return { handled: true, reply: `Ese número ya estaba en tu lista como *${patient?.nombre || nombre}* — no la dupliqué 🙂` };
