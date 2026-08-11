@@ -36,7 +36,7 @@ import {
 import { handleRegistrarTrabajo, handleConsultarTrabajo, handleReporteGdh } from './trabajo.js';
 import { handleRegistrarPagoFijo, handleConsultarPagosFijos } from './pagosFijos.js';
 import { contextoCierre, limpiarContextoCierre } from './buenasNoches.js';
-import { addPatient, normalizePhone } from './patients.js';
+import { addPatient, normalizePhone, listPacientesActivos, listLeads, marcarComoPaciente } from './patients.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -44,7 +44,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "registrar_paciente" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "listar_pacientes" | "marcar_paciente" | "registrar_paciente" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -68,6 +68,8 @@ Formato exacto:
   "habito": { "kind": "agua" | "sueño" | "ejercicio" | "comida" | "descanso" | "disfrute" | "otro", "amount": number | null, "unit": string | null, "note": string | null } | null,
   "persona": { "name": string, "relation": string | null, "phone": string | null, "birthday": string | null } | null,
   "paciente_nuevo": { "name": string | null, "phone": string | null } | null,
+  "listado": { "tipo": "pacientes" | "leads", "origen": "campaña" | "montsinai" | "organico" | null } | null,
+  "marcar": { "name": string, "es_paciente": boolean } | null,
   "contacto": { "person": string } | null,
   "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
   "completar": { "title": string } | null
@@ -135,6 +137,10 @@ Reglas:
 - ESCRIBIR DIARIO: "escribe en mi diario … / querido diario … / anota en mi diario … / en mi diario … / hoy en mi diario …" (una entrada personal, reflexiva, del día) → escribir_diario. diario.content = lo que quiere guardar, tal cual lo dice.
 - CONSULTAR DIARIO: "léeme mi diario / qué escribí en mi diario / mis entradas del diario / mi diario" → consultar_diario.
 - SALUD / HÁBITO / DESCANSO: "tomé X de agua / dormí X horas / hice ejercicio (X min) / comí ... / caminé / hoy descansé / vi una peli / salí a pasear / me di un gusto" → registrar_habito. habito.kind ∈ [agua, sueño, ejercicio, comida, descanso, disfrute, otro]; amount+unit si da cantidad (ej 2 "litros", 6 "horas", 30 "min"); note = detalle.
+- LISTAR PACIENTES (los que ve EN CONSULTA, para darles seguimiento): "dime mis pacientes / qué pacientes tengo / lista de pacientes / mis pacientes activos / a quiénes estoy viendo / cuántos pacientes tengo" → listar_pacientes con listado.tipo = "pacientes".
+  LISTAR LEADS (gente que le escribió pero NO es paciente): "cuántos leads tengo / mis leads / los de la campaña / los que llegaron por la pauta / los que me derivó Mont Sinai / los orgánicos" → listar_pacientes con listado.tipo = "leads" y listado.origen = "campaña" (pauta/publicidad/anuncio), "montsinai" (derivados de la clínica), "organico" (escribieron por su cuenta), o null si pide todos.
+  OJO: paciente ≠ lead ≠ silenciada. Si pregunta por PACIENTES nunca devuelvas leads.
+- MARCAR COMO PACIENTE (un lead que ya empezó consulta): "X ya es mi paciente / marca a X como paciente / X pasó a consulta / ya estoy viendo a X" → marcar_paciente. marcar.name = el nombre; marcar.es_paciente = true. Si dice lo contrario ("X ya no es mi paciente / sácala de pacientes / dale de baja de mi lista"), es_paciente = false.
 - REGISTRAR PACIENTE NUEVA (alguien a quien ATIENDE en consulta, todavía no está en Neura): "registra a Maximina / agrégala como paciente / es nueva, regístrala / da de alta a X / anota a X que es paciente nueva (su número es 999...)" → registrar_paciente. paciente_nuevo.name = el nombre (o null si solo dice "es nueva, regístrala" refiriéndose a alguien que acabas de nombrar); paciente_nuevo.phone = el número si lo da (o null).
   TAMBIÉN aquí: si el mensaje es SOLO un número de teléfono peruano (9 dígitos, con o sin +51) sin nada más, es el número de la paciente que quedó pendiente de registrar → registrar_paciente con name null y phone = ese número.
   DIFERENCIA CLAVE con agregar_persona: paciente = alguien que atiende en consulta; persona = un vínculo personal suyo (mamá, pareja, amiga) para que Neura la ayude a cuidarlo.
@@ -206,6 +212,50 @@ async function resolvePatient(name) {
   return { patient: rows[0] };
 }
 
+// Lista por NOMBRE — el teléfono no le sirve para dar seguimiento.
+async function listarPacientes(l) {
+  const tipo = l?.tipo === 'leads' ? 'leads' : 'pacientes';
+
+  if (tipo === 'pacientes') {
+    const rows = await listPacientesActivos();
+    if (!rows.length) {
+      return { handled: true, reply: 'Todavía no tienes a nadie marcado como paciente 🌸\n\nDime "X ya es mi paciente" y la agrego a tu lista de seguimiento.' };
+    }
+    const lines = rows.map((p) => {
+      const ses = p.sesiones ? ` · ${p.sesiones} sesión${p.sesiones === 1 ? '' : 'es'}` : '';
+      return `• *${p.nombre}*${ses}${p.en_pausa ? ' · _en pausa_' : ''}`;
+    });
+    return { handled: true, reply: `🩺 *Tus pacientes* (${rows.length}):\n${lines.join('\n')}` };
+  }
+
+  const origen = ['campaña', 'montsinai', 'organico'].includes(l?.origen) ? l.origen : null;
+  const rows = await listLeads(origen);
+  if (!rows.length) return { handled: true, reply: `No tengo leads${origen ? ` de ${origen}` : ''} por ahora 🙂` };
+
+  const TITULO = { 'campaña': '📣 De campaña', montsinai: '🏥 De Mont Sinai', organico: '🌱 Orgánicos' };
+  if (origen) {
+    const lines = rows.slice(0, 20).map((x) => `• ${x.nombre}`);
+    const mas = rows.length > 20 ? `\n…y ${rows.length - 20} más` : '';
+    return { handled: true, reply: `${TITULO[origen]} (${rows.length}):\n${lines.join('\n')}${mas}\n\n_Son leads, no pacientes_ ✦` };
+  }
+  const porOrigen = new Map();
+  for (const x of rows) porOrigen.set(x.origen, (porOrigen.get(x.origen) || 0) + 1);
+  const resumen = [...porOrigen.entries()].map(([o, n]) => `${TITULO[o] ?? o}: *${n}*`).join('\n');
+  return { handled: true, reply: `📇 *Tus leads* (${rows.length}):\n${resumen}\n\n_Pídeme "los de campaña" o "los de Mont Sinai" para verlos_ ✦` };
+}
+
+async function marcarPaciente(m) {
+  if (!m?.name) return { handled: false };
+  const { patient, error } = await resolvePatient(m.name);
+  if (error) return { handled: true, reply: error };
+  const esPaciente = m.es_paciente !== false;
+  const updated = await marcarComoPaciente(patient.phone, esPaciente);
+  if (!updated) return { handled: true, reply: 'Uy, no pude actualizarla. ¿Me lo repites?' };
+  return esPaciente
+    ? { handled: true, reply: `✅ *${updated.nombre}* ya está en tu lista de pacientes 🩺\n\nPídeme "mis pacientes" cuando quieras verlos.` }
+    : { handled: true, reply: `Listo, saqué a *${updated.nombre}* de tus pacientes (vuelve a leads).` };
+}
+
 // Registra una paciente nueva. `phone` puede faltar: en ese caso pedimos el
 // número y dejamos el nombre pendiente para el siguiente mensaje.
 async function registrarPaciente(p, raw) {
@@ -254,6 +304,8 @@ export async function handleNeuraInstruction(text) {
   }
 
   switch (parsed?.intent) {
+    case 'listar_pacientes':     return listarPacientes(parsed.listado);
+    case 'marcar_paciente':      return marcarPaciente(parsed.marcar);
     case 'registrar_paciente':   return registrarPaciente(parsed.paciente_nuevo, text);
     case 'registrar_finanza':    return registrarFinanza(parsed.finanza, text);
     case 'agregar_recordatorio': return agregarRecordatorio(parsed.recordatorio, text);

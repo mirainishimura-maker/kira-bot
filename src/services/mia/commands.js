@@ -25,7 +25,7 @@
 //   /descartar 7                             (descarta la corrección #7)
 //   /grupos                                  (lista JIDs de grupos vistos → setear ITACA_GROUP_JID)
 
-import { addPatient, listActivePatients, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
+import { addPatient, listActivePatients, listPacientesActivos, listLeads, marcarComoPaciente, removePatient, addNoteToPatient, normalizePhone, findPatientByPhone, setPatientEstado } from './patients.js';
 import { logMessage, recentMessages } from './conversations.js';
 import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { sendText, sendImage } from '../../lib/evolution.js';
@@ -40,7 +40,7 @@ import { getRecentGroups } from '../channels.js';
 import { armCapture, stickersConfigured } from './stickerControl.js';
 import { config } from '../../config.js';
 
-const COMMAND_RE = /^\/(paciente|pacientes|quitar|notas|atender|retomar|reconectar|responder|silenciar|activar|notocar|sticker|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|ok|implementar|descartar|grupos)\b/i;
+const COMMAND_RE = /^\/(pacientes|paciente|espaciente|nopaciente|leads|quitar|notas|atender|retomar|reconectar|responder|silenciar|activar|notocar|sticker|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|ok|implementar|descartar|grupos)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -157,6 +157,9 @@ async function runSingleCommand(text) {
   try {
     if (command === 'paciente')  return await cmdAddPatient(rest);
     if (command === 'pacientes') return await cmdListPatients();
+    if (command === 'espaciente') return await cmdEsPaciente(rest, true);
+    if (command === 'nopaciente') return await cmdEsPaciente(rest, false);
+    if (command === 'leads')     return await cmdLeads(rest);
     if (command === 'quitar')    return await cmdRemovePatient(rest);
     if (command === 'notas')     return await cmdAddNote(rest);
     if (command === 'atender')   return await cmdAtenderLead(rest);
@@ -281,13 +284,61 @@ async function cmdAddPatient(rest) {
   return reply(`✓ Agregado: ${result.patient.nombre} (${result.patient.phone}) como "${result.patient.etiqueta}".`);
 }
 
+// /pacientes — SOLO las que ve en consulta. Antes listaba las 242 filas de la
+// tabla (todo el que alguna vez escribió), que para dar seguimiento no sirve.
 async function cmdListPatients() {
-  const rows = await listActivePatients();
-  if (!rows.length) return reply('No tienes pacientes activos en la lista.');
-  const lines = rows.map(p =>
-    `• ${p.nombre} — ${p.phone} — ${p.etiqueta ?? 'sin etiqueta'} (${p.estado})`
+  const rows = await listPacientesActivos();
+  if (!rows.length) {
+    return reply(
+      'Todavía no tienes a nadie marcado como paciente 🌸\n\n' +
+      'Márcalas con */espaciente <telefono>* (o dime por voz "X es mi paciente") ' +
+      'y desde ahí te las listo aquí para darles seguimiento.'
+    );
+  }
+  const lines = rows.map((p) => {
+    const pausa = p.en_pausa ? ' · _en pausa_' : '';
+    const ses = p.sesiones
+      ? ` — ${p.sesiones} sesión${p.sesiones === 1 ? '' : 'es'}, última ${String(p.ultima_sesion).slice(0, 10)}`
+      : ' — sin sesiones registradas';
+    return `• *${p.nombre}*${ses}${pausa}`;
+  });
+  return reply(`🩺 *Tus pacientes* (${rows.length}):\n${lines.join('\n')}`);
+}
+
+// /leads [campaña|montsinai|organico] — separado de los pacientes.
+async function cmdLeads(rest) {
+  const arg = (rest || '').trim().toLowerCase();
+  const origen = ['campaña', 'campana', 'montsinai', 'organico', 'orgánico'].includes(arg)
+    ? (arg === 'campana' ? 'campaña' : arg === 'orgánico' ? 'organico' : arg)
+    : null;
+  const rows = await listLeads(origen);
+  if (!rows.length) return reply(`No tengo leads${origen ? ` de ${origen}` : ''} por ahora.`);
+
+  const TITULO = { 'campaña': '📣 Campaña', montsinai: '🏥 Mont Sinai', organico: '🌱 Orgánicos' };
+  if (origen) {
+    const lines = rows.slice(0, 30).map((l) => `• ${l.nombre} — ${l.phone}${l.en_pausa ? ' · en pausa' : ''}`);
+    const mas = rows.length > 30 ? `\n…y ${rows.length - 30} más` : '';
+    return reply(`${TITULO[origen]} (${rows.length}):\n${lines.join('\n')}${mas}`);
+  }
+  const porOrigen = new Map();
+  for (const l of rows) porOrigen.set(l.origen, (porOrigen.get(l.origen) || 0) + 1);
+  const resumen = [...porOrigen.entries()].map(([o, n]) => `${TITULO[o] ?? o}: *${n}*`).join('\n');
+  return reply(
+    `📇 *Tus leads* (${rows.length} en total)\n${resumen}\n\n` +
+    '_Mira uno por uno con_ */leads campaña*, */leads montsinai* _o_ */leads organico*'
   );
-  return reply(`Pacientes activos (${rows.length}):\n${lines.join('\n')}`);
+}
+
+// /espaciente <telefono> — mueve a alguien de lead a PACIENTE (y /nopaciente
+// lo devuelve). Es lo que mantiene la lista de seguimiento limpia.
+async function cmdEsPaciente(rest, esPaciente) {
+  const phone = (rest || '').trim().split(/\s+/)[0];
+  if (!phone) return reply(`Uso: /${esPaciente ? 'espaciente' : 'nopaciente'} <telefono>`);
+  const updated = await marcarComoPaciente(phone, esPaciente);
+  if (!updated) return reply(`No encontré a nadie con ese número (${normalizePhone(phone)}).`);
+  return esPaciente
+    ? reply(`✓ *${updated.nombre}* ahora es tu paciente. Ya aparece en /pacientes 🩺`)
+    : reply(`✓ *${updated.nombre}* vuelve a la lista de leads (sale de /pacientes).`);
 }
 
 async function cmdRemovePatient(rest) {

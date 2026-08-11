@@ -2,6 +2,7 @@
 // La tabla `patients` vive en el Supabase privado de Mirai.
 
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
+import { config } from '../../config.js';
 
 // Normaliza un teléfono a E.164 sin "+" ni @s.whatsapp.net.
 // Ej: "+51 987-654-321" → "51987654321"
@@ -80,6 +81,94 @@ export async function createLeadAuto({ phone, nombre }) {
     console.error('[mia/patients] createLeadAuto error:', error.message);
     return null;
   }
+  return data;
+}
+
+// ─── Categorías: TRES cosas distintas que la tabla mezclaba ───────────
+//
+// La tabla `patients` guarda a todo el que alguna vez escribió por WhatsApp.
+// Eso NO son pacientes. Hay que separar (regla de Mirai, 11 ago 2026):
+//   · PACIENTE   = la ve en consulta actualmente, es a quien le da seguimiento.
+//   · LEAD       = alguien que escribió; se distingue por ORIGEN (campaña,
+//                  Mont Sinai —fuente ya cerrada—, u orgánico).
+//   · SILENCIADA = estado CONVERSACIONAL (Mia no le responde). Es ortogonal:
+//                  una paciente real puede estar silenciada porque Mirai la
+//                  atiende a mano. NO define si es paciente o no.
+//
+// La `etiqueta` es la fuente de verdad de la CATEGORÍA, y el `estado` la del
+// momento conversacional. Nunca mezclarlos al listar.
+export const ETIQUETAS_PACIENTE = ['paciente', 'paciente_activo', 'consultorio'];
+export const ETIQUETAS_LEAD = {
+  campaña:   'lead_campaña',
+  montsinai: 'lead_montsinai',
+  organico:  'lead_organico',
+};
+
+// Pacientes actuales en consulta — lo que Mirai pide cuando dice "mis
+// pacientes". Incluye a las silenciadas (siguen siendo sus pacientes) pero lo
+// marca, para que sepa a quién atiende ella a mano.
+export async function listPacientesActivos() {
+  if (!miraiSupabase) return [];
+  const [pRes, sRes] = await Promise.all([
+    miraiSupabase.from('patients')
+      .select('id, nombre, phone, etiqueta, estado')
+      .in('etiqueta', ETIQUETAS_PACIENTE).neq('estado', 'alta'),
+    miraiSupabase.from('sessions').select('patient_id, session_date, created_at'),
+  ]);
+
+  const sesiones = new Map();   // id → { n, ultima }
+  for (const s of sRes.data ?? []) {
+    const cur = sesiones.get(s.patient_id) ?? { n: 0, ultima: null };
+    cur.n += 1;
+    const f = s.session_date || s.created_at;
+    if (f && (!cur.ultima || f > cur.ultima)) cur.ultima = f;
+    sesiones.set(s.patient_id, cur);
+  }
+
+  const miNumero = normalizePhone(config.mia.personalPhone);
+  return (pRes.data ?? [])
+    .filter((p) => normalizePhone(p.phone) !== miNumero)
+    .map((p) => {
+      const s = sesiones.get(p.id);
+      return {
+        nombre: p.nombre,
+        phone: p.phone,
+        estado: p.estado,
+        sesiones: s?.n ?? 0,
+        ultima_sesion: s?.ultima ?? null,
+        en_pausa: p.estado === 'silenciada',
+      };
+    })
+    .sort((a, b) => (b.ultima_sesion || '').localeCompare(a.ultima_sesion || '') || a.nombre.localeCompare(b.nombre));
+}
+
+// Leads por ORIGEN. `origen` ∈ campaña | montsinai | organico | null (todos).
+export async function listLeads(origen = null) {
+  if (!miraiSupabase) return [];
+  const etiquetas = origen ? [ETIQUETAS_LEAD[origen]].filter(Boolean) : Object.values(ETIQUETAS_LEAD);
+  if (!etiquetas.length) return [];
+  const { data } = await miraiSupabase.from('patients')
+    .select('nombre, phone, etiqueta, estado')
+    .in('etiqueta', etiquetas).neq('estado', 'alta')
+    .order('fecha_alta', { ascending: false });
+  return (data ?? []).map((p) => ({
+    nombre: p.nombre, phone: p.phone, estado: p.estado,
+    origen: Object.keys(ETIQUETAS_LEAD).find((k) => ETIQUETAS_LEAD[k] === p.etiqueta) ?? 'otro',
+    en_pausa: p.estado === 'silenciada',
+  }));
+}
+
+// Marca a alguien como PACIENTE actual (o lo devuelve a lead). Es lo que
+// arregla la categoría cuando un lead se convierte en paciente de verdad.
+export async function marcarComoPaciente(phone, esPaciente = true) {
+  if (!miraiSupabase) return null;
+  const normalized = normalizePhone(phone);
+  if (!normalized) return null;
+  const { data, error } = await miraiSupabase
+    .from('patients')
+    .update({ etiqueta: esPaciente ? 'paciente' : 'lead_organico' })
+    .eq('phone', normalized).select().maybeSingle();
+  if (error) { console.error('[mia/patients] marcarComoPaciente:', error.message); return null; }
   return data;
 }
 
