@@ -22,7 +22,7 @@ import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { sendText, fetchMessageMediaBase64 } from '../../lib/evolution.js';
 import { transcribeAudio } from './media.js';
 import { rememberMiaSentId } from './echoTracker.js';
-import { createIssue, findLinkedPR, getPR, githubReady, findClaudeBranch, createPR, mergePR } from '../../lib/github.js';
+import { createIssue, findLinkedPR, getPR, githubReady, findClaudeBranch, createPR, mergePR, closePR } from '../../lib/github.js';
 import { config } from '../../config.js';
 
 const TABLE = 'itaca_correcciones';
@@ -304,14 +304,49 @@ export async function aprobarPR(id = null) {
 
   const r = await mergePR(t.pr_number, { title: t.titulo });
   if (!r.ok) {
-    const pista = /403|permission/i.test(r.error)
-      ? '\n\nProbablemente al *GITHUB_TOKEN* le falta el permiso *Contents: Read and write*.'
-      : '';
-    return `⚠️ No pude hacer el merge del PR #${t.pr_number}: ${r.error}${pista}\n\nPuedes hacerlo a mano acá:\n${t.pr_url || ''}`;
+    // Un conflicto NO se arregla a mano desde el celular: la rama se escribió
+    // sobre una versión vieja del código. Lo honesto es rehacer la corrección
+    // sobre el código actual, no pedirle a Mirai que resuelva un merge.
+    if (/conflict/i.test(r.error) || /\b405\b/.test(r.error)) {
+      return (
+        `⚠️ La corrección #${t.id} ("${t.titulo}") choca con el código actual.\n\n` +
+        `Se implementó sobre una versión anterior del sistema y desde entonces main avanzó, así que ya no encaja. ` +
+        `Esto no se arregla desde el celular.\n\n` +
+        `👉 Dime *"rehaz la #${t.id}"* y la mando a implementar de nuevo sobre el código de hoy.`
+      );
+    }
+    if (/403|permission|not accessible/i.test(r.error)) {
+      return (
+        `⚠️ No pude hacer el merge del PR #${t.pr_number}: al *GITHUB_TOKEN* le falta el permiso *Contents: Read and write*.\n\n` +
+        `Se cambia en github.com/settings/personal-access-tokens → el token del bot → Repository permissions → Contents.\n\n` +
+        `Mientras tanto puedes mergearlo a mano acá:\n${t.pr_url || ''}`
+      );
+    }
+    return `⚠️ No pude hacer el merge del PR #${t.pr_number}: ${r.error}\n\nPuedes hacerlo a mano acá:\n${t.pr_url || ''}`;
   }
 
   await updateTicket(t.id, { estado: 'en_produccion' });
   return `✅ Listo, aprobé la corrección #${t.id} ("${t.titulo}").\n\nRailway ya está desplegando — te aviso cuando esté arriba 🚀`;
+}
+
+// Rehace una corrección cuyo PR quedó obsoleto (conflictos porque main avanzó).
+// Cierra el PR viejo, olvida issue/PR y la manda a implementar de nuevo sobre
+// el código de hoy. Es el camino correcto: resolver a mano un merge de hace un
+// mes desde el celular no es realista.
+export async function rehacerCorreccion(id) {
+  const t = await getTicket(id);
+  if (!t) return `No encontré la corrección #${id}. Usa /correcciones para ver la lista.`;
+  if (t.estado === 'en_produccion') return `La corrección #${id} ya está en producción ✅, no hace falta rehacerla.`;
+  if (!githubReady()) return 'No tengo configurado el acceso a GitHub.';
+
+  if (t.pr_number) {
+    const cerrado = await closePR(t.pr_number, 'Obsoleto: se rehace sobre el código actual (Mia).');
+    if (!cerrado.ok) console.warn('[itaca] no pude cerrar el PR viejo:', cerrado.error);
+  }
+  await updateTicket(id, { estado: 'pendiente', issue_number: null, pr_number: null, pr_url: null });
+
+  const r = await aprobarCorreccion(id);
+  return `♻️ Rehaciendo la corrección #${id} sobre el código de hoy.\n\n${r}`;
 }
 
 export async function descartarCorreccion(id) {

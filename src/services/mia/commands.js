@@ -35,12 +35,12 @@ import { generateLeadReport } from './leadReport.js';
 import { runMetricas } from './metricas.js';
 import { blockRange, listBlocks, unblockRange, slotLabel } from './calendar.js';
 import { generarYSubirPlan } from './planCard.js';
-import { listPendientes, formatoListaPendientes, aprobarCorreccion, descartarCorreccion, aprobarPR } from './itacaCorrecciones.js';
+import { listPendientes, formatoListaPendientes, aprobarCorreccion, descartarCorreccion, aprobarPR, rehacerCorreccion } from './itacaCorrecciones.js';
 import { getRecentGroups } from '../channels.js';
 import { armCapture, stickersConfigured } from './stickerControl.js';
 import { config } from '../../config.js';
 
-const COMMAND_RE = /^\/(pacientes|paciente|espaciente|nopaciente|leads|quitar|notas|atender|retomar|reconectar|responder|silenciar|activar|notocar|sticker|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|aprobar|ok|implementar|descartar|grupos)\b/i;
+const COMMAND_RE = /^\/(pacientes|paciente|espaciente|nopaciente|leads|quitar|notas|atender|retomar|reconectar|responder|silenciar|activar|notocar|sticker|metricas|reporte|bloquear|desbloquear|bloqueos|paquete|agendar|confirmar|cancelar|correcciones|correccion|aprobar|rehacer|ok|implementar|descartar|grupos)\b/i;
 
 const SALUDO_ORGANICO = [
   'Hola! Te habla Mia, la asistente de la Psic. Mirai Nishimura 🌸',
@@ -180,6 +180,7 @@ async function runSingleCommand(text) {
     if (command === 'confirmar')   return await cmdConfirmar();
     if (command === 'cancelar')    return cmdCancelar();
     if (command === 'aprobar')     return reply(await aprobarPR(parseInt(String(rest).trim(), 10) || null));
+    if (command === 'rehacer')     return reply(await rehacerCorreccion(parseInt(String(rest).trim(), 10)));
     if (command === 'correcciones' || command === 'correccion') return await cmdCorrecciones();
     if (command === 'ok' || command === 'implementar')          return await cmdImplementar(rest);
     if (command === 'descartar')                                return await cmdDescartar(rest);

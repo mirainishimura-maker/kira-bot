@@ -156,6 +156,23 @@ export async function getPR(number) {
   }
 }
 
+// Cierra un PR sin mergear (para los que quedaron obsoletos por conflictos).
+export async function closePR(number, comment) {
+  const c = itacaCfg();
+  try {
+    if (comment) {
+      await gh(`/repos/${c.repo}/issues/${number}/comments`, {
+        method: 'POST', body: { body: comment },
+      });
+    }
+    await gh(`/repos/${c.repo}/pulls/${number}`, { method: 'PATCH', body: { state: 'closed' } });
+    return { ok: true };
+  } catch (err) {
+    console.error('[github] closePR error:', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
 // Hace merge de un PR (lo que Mirai hacía a mano desde el celular).
 // Requiere que el GITHUB_TOKEN tenga "Pull requests: Read and write" y
 // "Contents: Read and write". → { ok, merged } | { ok:false, error }
