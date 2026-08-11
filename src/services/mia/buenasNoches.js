@@ -23,15 +23,43 @@ const NOCHE = [
   'Cerrar el día en paz también es un logro. Hoy hiciste suficiente — aunque "suficiente" haya sido descansar 🌿',
 ];
 
+// ─── Cierre que SÍ guarda (10 ago 2026) ──────────────────────────────
+// Antes el mensaje a veces preguntaba "¿qué cosa buena tuvo hoy?" pero la
+// respuesta no quedaba en ningún lado. Ahora la pregunta alterna día por medio
+// entre GRATITUD (tabla espiritual) y ÁNIMO (tabla de check-in), y dejamos un
+// contexto para que neuraAssistant interprete la siguiente respuesta de Mirai
+// como la respuesta a esa pregunta (aunque no diga "agradezco" ni "me siento").
+const PREGUNTAS = {
+  gratitud: '🙏 Y antes de dormir: *¿por qué das gracias hoy?*\n\nDime una, aunque sea chiquita, y la guardo 🤍',
+  animo:    '💛 Y para cerrar: *¿cómo estuviste de ánimo hoy?*\n\nCuéntamelo en una frase y lo anoto — a ti también hay que medirte 🤍',
+};
+
+let cierrePendiente = null;             // { tipo, expiraMs }
+const CIERRE_TTL_MS = 10 * 60 * 60 * 1000;   // vale hasta la mañana siguiente
+
+// Lo consulta neuraAssistant para entender una respuesta suelta ("que pude
+// descansar", "cansada pero tranquila") como lo que es.
+export function contextoCierre() {
+  if (!cierrePendiente) return null;
+  if (cierrePendiente.expiraMs < Date.now()) { cierrePendiente = null; return null; }
+  return cierrePendiente.tipo;
+}
+export function limpiarContextoCierre() { cierrePendiente = null; }
+
 export async function runBuenasNoches({ dry = false } = {}) {
-  const idx = Math.floor(Date.parse(limaHoy()) / 864e5) % NOCHE.length;
-  const texto = `🌙 *Buenas noches, Mirai*\n\n${NOCHE[idx]}`;
+  const dia = Math.floor(Date.parse(limaHoy()) / 864e5);
+  const idx = dia % NOCHE.length;
+  const tipo = dia % 2 === 0 ? 'gratitud' : 'animo';
+  const texto = `🌙 *Buenas noches, Mirai*\n\n${NOCHE[idx]}\n\n${PREGUNTAS[tipo]}`;
 
   if (!dry) {
-    try { await sendPrivate(config.mia.personalPhone, texto); }
+    try {
+      await sendPrivate(config.mia.personalPhone, texto);
+      cierrePendiente = { tipo, expiraMs: Date.now() + CIERRE_TTL_MS };
+    }
     catch (e) { console.error('[mia/noches] envío:', e.message); return { ok: false, error: e.message, texto }; }
   }
-  return { ok: true, texto };
+  return { ok: true, texto, tipo };
 }
 
 export function startBuenasNochesCron() {

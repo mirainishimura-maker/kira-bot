@@ -15,6 +15,7 @@ import { startBriefCron, runBriefMatutino } from './services/mia/briefMatutino.j
 import { startGdhRecapCron, runGdhRecap } from './services/mia/gdhRecap.js';
 import { startResumenFinanzasCron, runResumenFinanzas } from './services/mia/resumenFinanzas.js';
 import { startSesionPrepCron, runSesionPrep } from './services/mia/sesionPrep.js';
+import { startSesionCierreCron, runSesionCierre } from './services/mia/sesionCierre.js';
 import { startAgendaSyncCron, runAgendaSync } from './services/mia/agendaSync.js';
 import { startCitasSyncCron, runCitasSync } from './services/mia/citasSync.js';
 import { startGenteCron, runGenteCheck } from './services/mia/gente.js';
@@ -408,6 +409,7 @@ app.listen(config.port, () => {
     startGdhRecapCron();
     startResumenFinanzasCron();
     startSesionPrepCron();
+    startSesionCierreCron();
     startAgendaSyncCron();
     startCitasSyncCron();
     startGenteCron();

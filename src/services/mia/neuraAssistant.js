@@ -35,6 +35,7 @@ import {
 } from './finanzas.js';
 import { handleRegistrarTrabajo, handleConsultarTrabajo, handleReporteGdh } from './trabajo.js';
 import { handleRegistrarPagoFijo, handleConsultarPagosFijos } from './pagosFijos.js';
+import { contextoCierre, limpiarContextoCierre } from './buenasNoches.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -140,15 +141,25 @@ Reglas:
 - AYUDA: "¿qué puedes hacer? / ayuda / en qué me ayudas / qué sabes hacer / cómo te uso / opciones" → ayuda.
 - Si es solo un "ok / gracias / jaja / 👍" o puro ruido sin intención, intent = "ninguno". CUALQUIER otra cosa que Mirai te diga —una pregunta, un comentario, algo que te cuenta, una duda, pensar en voz alta, o algo que simplemente no calza en las acciones de arriba— usa "reflexion", para que Mia SIEMPRE le responda con calidez. Nunca la dejes sin respuesta.`;
 
-async function classify(text) {
+// `cierre` = 'gratitud' | 'animo' | null. Cuando el mensaje de las 10pm hizo la
+// pregunta de cierre, Mirai suele responder suelto ("que pude descansar",
+// "cansada pero tranquila") sin las palabras que dispararían la intención. El
+// contexto se lo decimos al clasificador para que lo entienda — sin forzarlo:
+// si en vez de responder dicta un gasto, sigue siendo un gasto.
+async function classify(text, cierre = null) {
   const nowLima = new Date().toLocaleString('sv-SE', { timeZone: 'America/Lima' });
+  const pista = cierre === 'gratitud'
+    ? '\nContexto: hace un rato le preguntaste por qué da gracias hoy. Si su mensaje responde a eso, es intent "espiritual" con kind "gratitud".'
+    : cierre === 'animo'
+      ? '\nContexto: hace un rato le preguntaste cómo estuvo su ánimo hoy. Si su mensaje responde a eso, es intent "registrar_animo".'
+      : '';
   const resp = await miraiOpenai.chat.completions.create({
     model: MIA_MODEL,
     temperature: 0,
     response_format: { type: 'json_object' },
     messages: [
       { role: 'system', content: CLASSIFIER_SYSTEM },
-      { role: 'user', content: `Hora actual en Lima: ${nowLima} (-05:00).\nMirai dice: """${text}"""` },
+      { role: 'user', content: `Hora actual en Lima: ${nowLima} (-05:00).${pista}\nMirai dice: """${text}"""` },
     ],
   });
   try { return JSON.parse(resp.choices?.[0]?.message?.content ?? '{}'); }
@@ -173,9 +184,17 @@ async function resolvePatient(name) {
 export async function handleNeuraInstruction(text) {
   if (!miraiOpenai || !miraiSupabase || !text) return { handled: false };
 
+  const cierre = contextoCierre();
+
   let parsed;
-  try { parsed = await classify(text); }
+  try { parsed = await classify(text, cierre); }
   catch (err) { console.error('[neura] classify error:', err.message); return { handled: false }; }
+
+  // Si contestó la pregunta de cierre, la damos por respondida (no se la
+  // volvemos a interpretar con lo siguiente que diga esta noche).
+  if (cierre && (parsed?.intent === 'espiritual' || parsed?.intent === 'registrar_animo')) {
+    limpiarContextoCierre();
+  }
 
   switch (parsed?.intent) {
     case 'registrar_finanza':    return registrarFinanza(parsed.finanza, text);
