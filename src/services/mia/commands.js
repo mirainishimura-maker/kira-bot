@@ -191,7 +191,7 @@ async function runSingleCommand(text) {
   return reply(`Comando desconocido: /${cmd}`);
 }
 
-async function cmdAtenderLead(rest) {
+export async function cmdAtenderLead(rest) {
   // Formato: /atender <phone> <nombre>
   const tokens = rest.trim().split(/\s+/).filter(Boolean);
   if (tokens.length < 2) {
@@ -343,7 +343,7 @@ async function cmdEsPaciente(rest, esPaciente) {
     : reply(`✓ *${updated.nombre}* vuelve a la lista de leads (sale de /pacientes).`);
 }
 
-async function cmdRemovePatient(rest) {
+export async function cmdRemovePatient(rest) {
   const phone = rest.trim().split(/\s+/)[0];
   if (!phone) return reply('Uso: /quitar <telefono>');
   const normalized = normalizePhone(phone);
@@ -352,7 +352,7 @@ async function cmdRemovePatient(rest) {
   return reply(`✓ ${updated.nombre} marcado como "alta". Mia ya no le responde (silencio total). Si fue por error, reactívala con /activar ${normalized}.`);
 }
 
-async function cmdSilenciar(rest) {
+export async function cmdSilenciar(rest) {
   const phone = rest.trim().split(/\s+/)[0];
   if (!phone) return reply('Uso: /silenciar <telefono>\nEjemplo: /silenciar 51987654321');
   const updated = await setPatientEstado(phone, 'silenciada');
@@ -364,7 +364,7 @@ async function cmdSilenciar(rest) {
   );
 }
 
-async function cmdActivar(rest) {
+export async function cmdActivar(rest) {
   const phone = rest.trim().split(/\s+/)[0];
   if (!phone) return reply('Uso: /activar <telefono>\nEjemplo: /activar 51987654321');
   const updated = await setPatientEstado(phone, 'datos_parciales');
@@ -375,7 +375,7 @@ async function cmdActivar(rest) {
 // Lista de NO TOCAR: bloquea un número para que Mia NUNCA lo enganche — ni como
 // paciente, ni como lead nuevo (aunque escriba con palabras clave). Sirve para
 // tus contactos personales/de trabajo. Reversible con /activar.
-async function cmdNoTocar(rest) {
+export async function cmdNoTocar(rest) {
   const phone = normalizePhone(rest.trim().split(/\s+/)[0]);
   if (!phone) return reply('Uso: /notocar <telefono>\nEjemplo: /notocar 51999138246');
   const existing = await findPatientByPhone(phone);
@@ -428,12 +428,12 @@ function cmdSticker(rest) {
 
 // /metricas — reporte del embudo: Instagram (alcance) + WhatsApp (leads/guías) +
 // conversión a cita. Lo calcula y lo responde en el mismo chat.
-async function cmdMetricas() {
+export async function cmdMetricas() {
   const r = await runMetricas({ dry: true });
   return reply(r.texto || `⚠️ No pude calcular las métricas: ${r.error || 'error'}`);
 }
 
-async function cmdAddNote(rest) {
+export async function cmdAddNote(rest) {
   const trimmed = rest.trim();
   const sp = trimmed.indexOf(' ');
   if (sp < 0) return reply('Uso: /notas <telefono> <texto de la nota>');
@@ -815,7 +815,7 @@ async function enviarAPaciente(phone, nombre, mensajes) {
   return { patient };
 }
 
-async function cmdPaquete(rest) {
+export async function cmdPaquete(rest) {
   const toks = (rest || '').trim().split(/\s+/).filter(Boolean);
   if (toks.length < 4) return reply(USO_PAQUETE);
   const phone = toks[0];
@@ -860,7 +860,7 @@ async function cmdPaquete(rest) {
   );
 }
 
-async function cmdAgendar(rest) {
+export async function cmdAgendar(rest) {
   const toks = (rest || '').trim().split(/\s+/).filter(Boolean);
   if (toks.length < 2) return reply(USO_AGENDAR);
   const phone = toks[0];
@@ -892,7 +892,7 @@ const USO_RECONECTAR =
 // retomando el hilo exacto (p. ej. cuando Mirai no llegó a responder). Preview
 // + /confirmar como /paquete y /agendar. Si el paciente estaba silenciado, al
 // confirmar se reactiva (datos_parciales) para que Mia siga la conversación.
-async function cmdReconectar(rest) {
+export async function cmdReconectar(rest) {
   const toks = (rest || '').trim().split(/\s+/).filter(Boolean);
   if (toks.length < 1) return reply(USO_RECONECTAR);
   const phone = normalizePhone(toks[0]);
@@ -966,7 +966,11 @@ async function cmdReconectar(rest) {
   );
 }
 
-async function cmdConfirmar() {
+export function hasPendingEnvio() {
+  return Boolean(pendingEnvio);
+}
+
+export async function cmdConfirmar() {
   if (!pendingEnvio) return reply('No hay ningún envío pendiente. Usa /paquete, /agendar o /reconectar primero.');
   const p = pendingEnvio;
   pendingEnvio = null;
@@ -988,7 +992,7 @@ async function cmdConfirmar() {
   }
 }
 
-function cmdCancelar() {
+export function cmdCancelar() {
   if (!pendingEnvio) return reply('No había nada pendiente.');
   const n = pendingEnvio.nombre;
   pendingEnvio = null;
@@ -996,7 +1000,7 @@ function cmdCancelar() {
 }
 
 // ---- ITACA · correcciones desde el grupo "conversemos las tres" ----
-async function cmdCorrecciones() {
+export async function cmdCorrecciones() {
   const tickets = await listPendientes();
   return reply(formatoListaPendientes(tickets));
 }
@@ -1007,7 +1011,7 @@ async function cmdImplementar(rest) {
   return reply(await aprobarCorreccion(id));
 }
 
-async function cmdDescartar(rest) {
+export async function cmdDescartar(rest) {
   const id = parseInt(String(rest).trim(), 10);
   if (!Number.isInteger(id)) return reply('Uso: /descartar N  (ej. /descartar 7).');
   return reply(await descartarCorreccion(id));

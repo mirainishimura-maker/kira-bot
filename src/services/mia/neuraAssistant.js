@@ -39,7 +39,11 @@ import { handleRegistrarTrabajo, handleConsultarTrabajo, handleReporteGdh } from
 import { handleRegistrarPagoFijo, handleConsultarPagosFijos } from './pagosFijos.js';
 import { contextoCierre, limpiarContextoCierre } from './buenasNoches.js';
 import { addPatient, normalizePhone, listPacientesActivos, listLeads, marcarComoPaciente } from './patients.js';
-import { aprobarPR, rehacerCorreccion } from './itacaCorrecciones.js';
+import { aprobarPR, rehacerCorreccion, listPendientes, formatoListaPendientes, descartarCorreccion } from './itacaCorrecciones.js';
+import {
+  cmdSilenciar, cmdActivar, cmdNoTocar, cmdRemovePatient, cmdAddNote, cmdAtenderLead,
+  cmdReconectar, cmdMetricas, cmdPaquete, cmdAgendar, cmdConfirmar, cmdCancelar, hasPendingEnvio,
+} from './commands.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
 Mirai te habla en lenguaje natural (a veces por audio transcrito). Entiende qué
@@ -47,7 +51,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "aprobar_pr" | "rehacer_correccion" | "listar_pacientes" | "marcar_paciente" | "registrar_paciente" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "aprobar_pr" | "rehacer_correccion" | "listar_correcciones" | "descartar_correccion" | "listar_pacientes" | "marcar_paciente" | "registrar_paciente" | "silenciar_paciente" | "activar_paciente" | "no_tocar" | "dar_de_baja" | "agregar_nota_paciente" | "atender_lead" | "reconectar_lead" | "consultar_metricas" | "coordinar_paquete" | "coordinar_cita" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": [{ "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null }] | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -74,6 +78,8 @@ Formato exacto:
   "listado": { "tipo": "pacientes" | "leads", "origen": "campaña" | "montsinai" | "organico" | null } | null,
   "marcar": { "name": string, "es_paciente": boolean } | null,
   "pr": { "id": number | null } | null,
+  "control_paciente": { "patient_name": string | null, "phone": string | null, "nota": string | null } | null,
+  "coordinacion": { "patient_name": string, "sessions": number | null, "objetivo": string | null } | null,
   "contacto": { "person": string } | null,
   "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
   "completar": { "title": string } | null
@@ -123,7 +129,8 @@ Reglas:
 - CONSULTAR PLAN DE META (cuánto ahorrar al mes para llegar): "cuál es mi plan para Georgia / cuánto necesito ahorrar al mes para Italia / cuánto debo guardar por mes para <meta> / arma mi plan de ahorro para X" → consultar_plan. meta.name = la meta; meta.target = costo si lo menciona ahora; meta.target_date = fecha ISO si la menciona ahora.
 - REGISTRAR SUSCRIPCIÓN / PAGO FIJO: "agrega una suscripción: Netflix 30 el día 15 / pago Claude 73 el 9 de cada mes / tengo Spotify 20 mensual / anota el pago de mi tarjeta Visa el día 5 / mi crédito BCP se paga el 20" → registrar_pago_fijo. pagofijo.concept = nombre (Netflix, Claude, Tarjeta Visa, Crédito BCP…); pagofijo.amount = monto mensual si lo dice (o null); pagofijo.day = día del mes 1-31 si lo dice (o null); pagofijo.category = "Suscripción" (apps/servicios), "Tarjeta" (tarjeta de crédito), "Crédito" (préstamo/crédito), "Servicio" (luz/agua/internet), o "Otro".
 - CONSULTAR PAGOS FIJOS: "qué suscripciones tengo / qué pagos fijos tengo / qué me toca pagar / cuánto pago al mes en suscripciones / qué pagos vienen / mis pagos del mes" → consultar_pagos_fijos.
-- AGENDAR CITA: "agéndame a X el <día/hora> / ponle cita a X / resérvale a X / cítala a X ..." → agendar_cita. cita.patient_name = nombre del paciente; cita.start_iso = ISO con offset Lima -05:00 calculado desde el día/hora que da.
+- AGENDAR CITA (con día/hora YA decidida): "agéndame a X el <día/hora> / ponle cita a X / resérvale a X / cítala a X ..." → agendar_cita. cita.patient_name = nombre del paciente; cita.start_iso = ISO con offset Lima -05:00 calculado desde el día/hora que da.
+- COORDINAR CITA (SIN día/hora decidida — le manda un mensaje a X por WhatsApp preguntando cuándo puede): "escríbele a X para coordinar su próxima cita / pregúntale a X qué día le queda / contáctala para agendar / avísale a X que le toca sesión y ve cuándo puede" → coordinar_cita. coordinacion.patient_name = paciente. (Ojo: si SÍ da un día/hora concreto es agendar_cita, no coordinar_cita.)
 - REPROGRAMAR CITA: "cambia/mueve/reprograma la cita de X al <día/hora>" → reprogramar_cita. cita.patient_name; cita.new_start_iso = ISO -05:00.
 - CANCELAR CITA: "cancela/anula la cita de X" → cancelar_cita. cita.patient_name.
 - BLOQUEAR AGENDA (Mirai se marca NO DISPONIBLE en SU horario — NO es un paciente, NO es un recordatorio): "bloquéame / bloquea mi agenda / bloquear horario / no estoy disponible / no me pongas citas / no ofrezcas turnos / tápame / ocúpame / márcame ocupada / cierra mi agenda / estaré fuera / de viaje / no atiendo el <día/hora>" → bloquear_agenda.
@@ -134,6 +141,7 @@ Reglas:
 - CONSULTAR PACIENTE: "qué trabajé/vi con X / cómo va X / cuánto me debe X / cuánto ha invertido X / en qué sesión va X / cuántas sesiones lleva X / cuándo veo a X / cuándo es la cita de X" → consultar_paciente. consulta_paciente.patient_name; aspecto = "sesion" | "saldo" | "cita" | "todo". La respuesta ya trae número de sesión e invertido, así que NUNCA le pidas esos datos a Mirai: están en el sistema.
 - CREAR PAQUETE DE SESIONES: "X compró un paquete de 6 / véndele un paquete de 4 a X / arma un paquete de 6 sesiones para X / X se llevó el paquete de 4" → crear_paquete. paquete.patient_name = paciente; paquete.sessions = número de sesiones del paquete (4, 6, u otro; si no lo dice, null).
 - CONSULTAR PAQUETE: "cuántas sesiones le quedan a X / cómo va el paquete de X / le quedan sesiones a X / el paquete de X" → consultar_paquete. paquete.patient_name = paciente.
+- COORDINAR/OFRECER PAQUETE (Mia le ARMA y ENVÍA por WhatsApp la propuesta con tarjeta, AÚN NO comprado — distinto de crear_paquete que registra uno YA comprado): "ofrécele a X un paquete de 6 / propónle a X un paquete de 4 para <objetivo> / mándale a X la propuesta del paquete / hazle la oferta del paquete a X" → coordinar_paquete. coordinacion.patient_name = paciente; coordinacion.sessions = 4 o 6 (o el número que dé); coordinacion.objetivo = para qué (breve) si lo dice, si no null. Antes de enviar, Mia SIEMPRE te muestra la vista previa — le respondes "sí" o "no" para confirmar o cancelar.
 - GUARDAR NOTA: "apunta que / anota que / recuerda que <DATO> / guarda que / agrega X a la lista de Y" (un DATO o ítem SIN hora ni acción por hacer; NO es recordatorio) → guardar_nota. nota.content = el dato tal cual; nota.topic = tema en 1-2 palabras (ej "wifi", "lista de compras").
 - CONSULTAR NOTA: "qué anoté de X / cuál era el X / qué tengo en la lista de Y / dime el dato de X" → consultar_nota. busqueda_nota.query = a qué se refiere (pocas palabras).
 - BUSCAR (global, en todo Neura): "busca X / búscame todo lo de X / encuentra Y / ¿dónde está Z? / qué tengo sobre W" → buscar. buscar.query = qué busca.
@@ -145,6 +153,8 @@ Reglas:
 - APROBAR EL PR DE UNA CORRECCIÓN DE ITACA (Mirai responde al aviso de que hay código listo): "apruebo / aprobado / apruébalo / dale merge / merge / hazle merge / ya está, súbelo / mándalo a producción / dale / ok apruebo la #3" → aprobar_pr. pr.id = el número de corrección si lo menciona ("la #3"), si no null.
   OJO: esto es SOLO para el flujo de correcciones de ITACA. Un "ok" o "dale" suelto que no venga a cuento de un PR NO es aprobar_pr.
 - REHACER UNA CORRECCIÓN (su PR quedó obsoleto y choca con el código actual): "rehaz la #1 / rehazla / vuélvela a hacer / hazla de nuevo / que la implemente otra vez" → rehacer_correccion. pr.id = el número de corrección si lo dice, si no null.
+- LISTAR CORRECCIONES DE ITACA PENDIENTES: "qué correcciones tengo pendientes / dame la lista de correcciones / qué hay de ITACA por revisar / muéstrame las correcciones" → listar_correcciones.
+- DESCARTAR UNA CORRECCIÓN: "descarta la #5 / descártala / esa corrección no va / bórrala, no la necesito" → descartar_correccion. pr.id = el número si lo dice, si no null.
 - LISTAR PACIENTES (los que ve EN CONSULTA, para darles seguimiento): "dime mis pacientes / qué pacientes tengo / lista de pacientes / mis pacientes activos / a quiénes estoy viendo / cuántos pacientes tengo" → listar_pacientes con listado.tipo = "pacientes".
   TAMBIÉN es listar_pacientes cuando pide el CUADRO de todos: "hazme el cuadro de mis pacientes / dime en qué sesión va cada uno / cuánto ha invertido cada paciente / el resumen de todos mis pacientes / cuántas sesiones lleva cada uno". La lista ya trae número de sesión y lo invertido — NUNCA le preguntes quiénes son sus pacientes, eso ya está en el sistema.
   LISTAR LEADS (gente que le escribió pero NO es paciente): "cuántos leads tengo / mis leads / los de la campaña / los que llegaron por la pauta / los que me derivó Mont Sinai / los orgánicos" → listar_pacientes con listado.tipo = "leads" y listado.origen = "campaña" (pauta/publicidad/anuncio), "montsinai" (derivados de la clínica), "organico" (escribieron por su cuenta), o null si pide todos.
@@ -153,6 +163,14 @@ Reglas:
 - REGISTRAR PACIENTE NUEVA (alguien a quien ATIENDE en consulta, todavía no está en Neura): "registra a Maximina / agrégala como paciente / es nueva, regístrala / da de alta a X / anota a X que es paciente nueva (su número es 999...)" → registrar_paciente. paciente_nuevo.name = el nombre (o null si solo dice "es nueva, regístrala" refiriéndose a alguien que acabas de nombrar); paciente_nuevo.phone = el número si lo da (o null).
   TAMBIÉN aquí: si el mensaje es SOLO un número de teléfono peruano (9 dígitos, con o sin +51) sin nada más, es el número de la paciente que quedó pendiente de registrar → registrar_paciente con name null y phone = ese número.
   DIFERENCIA CLAVE con agregar_persona: paciente = alguien que atiende en consulta; persona = un vínculo personal suyo (mamá, pareja, amiga) para que Neura la ayude a cuidarlo.
+- SILENCIAR A UN PACIENTE (PAUSA reversible — Mia deja de responderle mientras Mirai lo atiende manual, por AHORA): "silencia a X / que Mia no le responda a X por ahora / pon a X en pausa / deja de responderle a X" → silenciar_paciente. control_paciente.patient_name = paciente.
+- ACTIVAR A UN PACIENTE (quita la pausa/silencio, Mia vuelve a responderle): "reactiva a X / que Mia le vuelva a responder a X / quítale la pausa a X / activa a X de nuevo" → activar_paciente. control_paciente.patient_name = paciente.
+- NO TOCAR (contacto personal/de trabajo — Mia NUNCA debe engancharlo, ni como lead nuevo aunque escriba con palabras clave; DISTINTO de silenciar, que sí es para pacientes): "X es mi [amiga/hermana/colega], que Mia nunca le responda / agrega el número 999... a no tocar / ese número no es paciente, no lo toques nunca" → no_tocar. control_paciente.patient_name = el nombre si lo da (o null); control_paciente.phone = el número si lo da (o null). Necesitas AL MENOS uno de los dos.
+- DAR DE BAJA A UN PACIENTE (DEFINITIVO — Mia deja de responderle PARA SIEMPRE, no es una pausa; úsalo solo si Mirai lo pide claro): "dale de baja a X / termina el seguimiento de X / ya no sigas con X, ciérralo / X ya no vuelve, bórrala de mi lista para siempre" → dar_de_baja. control_paciente.patient_name = paciente. (Ojo: si solo dice "X ya no es mi paciente" sin más énfasis, eso es marcar_paciente con es_paciente false — vuelve a leads pero Mia AÚN puede hablarle. dar_de_baja es más fuerte: silencio total.)
+- AGREGAR NOTA A UN PACIENTE (un dato o detalle sobre SU FICHA, no una nota general): "anota en la ficha de X que… / agrégale una nota a X: … / apunta sobre X que…" → agregar_nota_paciente. control_paciente.patient_name = paciente; control_paciente.nota = el contenido tal cual. (Ojo: "apunta que <dato suelto, sin nombrar paciente>" es guardar_nota, no esto.)
+- ATENDER UN LEAD NUEVO (alguien que te escribió directo, fuera del flujo normal, y quieres que Mia lo tome como lead + le mande el saludo de bienvenida): "atiende a X, su número es 999... / activa el saludo para X / que Mia salude a X, escribió directo" → atender_lead. control_paciente.patient_name = nombre; control_paciente.phone = el número (requerido).
+- RECONECTAR CON UN LEAD/PACIENTE (Mia REDACTA un mensaje cálido retomando el hilo de la conversación guardada — para cuando quedó pendiente o Mirai no llegó a responder): "redáctale un mensaje a X para retomar el contacto / escríbele a X para reconectar / retoma la conversación con X (menciónale la beca de S/45)" → reconectar_lead. control_paciente.patient_name = paciente; control_paciente.nota = alguna indicación extra que dé para orientar el mensaje (o null). Antes de enviar, Mia te muestra la vista previa — le respondes "sí" o "no".
+- CONSULTAR MÉTRICAS DEL EMBUDO (Instagram + leads + conversión, NO es lo mismo que consultar_trabajo de GDH): "cómo van mis métricas / cómo va el embudo / cuántos leads entraron esta semana por la pauta / dame las métricas" → consultar_metricas.
 - AGREGAR PERSONA: "agrega a mi mamá / registra a mi amiga X / anota a mi pareja Y (cumple el <fecha>, su número es ...)" → agregar_persona. persona.name = nombre; persona.relation = vínculo (mamá, pareja, amiga, hermano...); persona.phone si lo da; persona.birthday = ISO YYYY-MM-DD si la da.
 - CONTACTO YA HECHO (pasado): "llamé a mi mamá / hablé con X / le escribí a Y / vi a Z / almorcé con W" → contacto_persona. contacto.person = a quién. (Ojo: "recuérdame llamar a X" es recordatorio; "agrega a X" es agregar_persona.)
 - ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
@@ -296,6 +314,91 @@ async function registrarPaciente(p, raw) {
   }
 }
 
+// ─── Gestión de pacientes en lenguaje natural (antes solo con /comandos) ──
+// Reusan los handlers de commands.js (misma lógica que /silenciar, /paquete,
+// etc. — cero duplicación) resolviendo el nombre a teléfono con resolvePatient.
+function fromCmd(r) {
+  return { handled: true, reply: r?.messages?.[0]?.text || '✓ Hecho.' };
+}
+
+async function silenciarPaciente(cp) {
+  if (!cp?.patient_name) return { handled: true, reply: '¿A quién silencio? Dime el nombre 🙂' };
+  const { patient, error } = await resolvePatient(cp.patient_name);
+  if (error) return { handled: true, reply: error };
+  return fromCmd(await cmdSilenciar(patient.phone));
+}
+
+async function activarPaciente(cp) {
+  if (!cp?.patient_name) return { handled: true, reply: '¿A quién reactivo? Dime el nombre 🙂' };
+  const { patient, error } = await resolvePatient(cp.patient_name);
+  if (error) return { handled: true, reply: error };
+  return fromCmd(await cmdActivar(patient.phone));
+}
+
+// Contacto personal/de trabajo: acepta nombre (si ya está en el sistema) o
+// teléfono directo (lo usual, ya que a menudo nunca escribió).
+async function noTocar(cp) {
+  let phone = normalizePhone(cp?.phone);
+  if (!phone && cp?.patient_name) {
+    const { patient } = await resolvePatient(cp.patient_name);
+    if (patient) phone = patient.phone;
+  }
+  if (!phone) return { handled: true, reply: '¿A quién agrego a no tocar? Dame el nombre o el número 🙂' };
+  return fromCmd(await cmdNoTocar(phone));
+}
+
+async function darDeBaja(cp) {
+  if (!cp?.patient_name) return { handled: true, reply: '¿A quién doy de baja? Dime el nombre 🙂' };
+  const { patient, error } = await resolvePatient(cp.patient_name);
+  if (error) return { handled: true, reply: error };
+  return fromCmd(await cmdRemovePatient(patient.phone));
+}
+
+async function agregarNotaPaciente(cp) {
+  if (!cp?.patient_name || !cp?.nota?.trim()) return { handled: true, reply: '¿A quién y qué anoto? Dime "anota en la ficha de X que…" 🙂' };
+  const { patient, error } = await resolvePatient(cp.patient_name);
+  if (error) return { handled: true, reply: error };
+  return fromCmd(await cmdAddNote(`${patient.phone} ${cp.nota.trim()}`));
+}
+
+async function atenderLead(cp) {
+  const phone = normalizePhone(cp?.phone);
+  if (!phone || !cp?.patient_name?.trim()) return { handled: true, reply: 'Dame el nombre Y el número para atenderlo 🙂' };
+  return fromCmd(await cmdAtenderLead(`${phone} ${cp.patient_name.trim()}`));
+}
+
+async function reconectarLead(cp) {
+  if (!cp?.patient_name) return { handled: true, reply: '¿Con quién reconecto? Dime el nombre 🙂' };
+  const { patient, error } = await resolvePatient(cp.patient_name);
+  if (error) return { handled: true, reply: error };
+  return fromCmd(await cmdReconectar(`${patient.phone} ${cp.nota || ''}`.trim()));
+}
+
+async function consultarMetricas() {
+  return fromCmd(await cmdMetricas());
+}
+
+// Ofrece un paquete AÚN NO comprado (tarjeta + preview, distinto de
+// crear_paquete que registra uno ya vendido). Requiere confirmación aparte.
+async function coordinarPaquete(c) {
+  if (!c?.patient_name) return { handled: true, reply: '¿Para quién es el paquete? Dime el nombre 🙂' };
+  const n = Number(c.sessions);
+  if (!Number.isFinite(n) || n <= 0) return { handled: true, reply: '¿De cuántas sesiones? (normalmente 4 o 6) 🙂' };
+  const { patient, error } = await resolvePatient(c.patient_name);
+  if (error) return { handled: true, reply: error };
+  const objetivo = (c.objetivo || '').trim() || 'continuar su proceso';
+  return fromCmd(await cmdPaquete(`${patient.phone} ${patient.nombre} ${n} ${objetivo}`));
+}
+
+// Manda un mensaje ABRIENDO la coordinación (sin hora fija todavía). Requiere
+// confirmación aparte. Distinto de agendar_cita, que reserva un horario ya.
+async function coordinarCita(c) {
+  if (!c?.patient_name) return { handled: true, reply: '¿Con quién coordino? Dime el nombre 🙂' };
+  const { patient, error } = await resolvePatient(c.patient_name);
+  if (error) return { handled: true, reply: error };
+  return fromCmd(await cmdAgendar(`${patient.phone} ${patient.nombre}`));
+}
+
 // Punto de entrada. { handled:true, reply } si ejecutó algo; { handled:false } si no.
 export async function handleNeuraInstruction(text) {
   if (!miraiOpenai || !miraiSupabase || !text) return { handled: false };
@@ -304,6 +407,17 @@ export async function handleNeuraInstruction(text) {
   // número. No hace falta molestar al clasificador para eso.
   if (/^(?:\+?51)?\s*9\d{2}\s*\d{3}\s*\d{3}$/.test(text.trim()) && pacienteNuevoPendiente()) {
     return registrarPaciente({ name: null, phone: text }, text);
+  }
+
+  // Atajo de SEGURIDAD para confirmar/cancelar un envío pendiente (coordinar
+  // paquete/cita, reconectar): un "sí"/"no" corto y sin ambigüedad se resuelve
+  // por regex, NUNCA por el LLM — así nunca se dispara un envío real a un
+  // paciente por una mala interpretación del clasificador. Solo aplica si hay
+  // algo pendiente; si no, sigue el flujo normal (un "sí" suelto es "ninguno").
+  if (hasPendingEnvio()) {
+    const t = text.trim().toLowerCase();
+    if (/^(s[ií]|dale|confirmo|confirmar|env[ií]alo|m[aá]ndalo|hazlo)[.!¡]*$/.test(t)) return fromCmd(await cmdConfirmar());
+    if (/^(no|cancela|cancelar|mejor no|olv[ií]dalo|no lo mandes)[.!¡]*$/.test(t)) return fromCmd(cmdCancelar());
   }
 
   const cierre = contextoCierre();
@@ -322,10 +436,24 @@ export async function handleNeuraInstruction(text) {
     case 'aprobar_pr':           return { handled: true, reply: await aprobarPR(parsed.pr?.id ?? null) };
     case 'rehacer_correccion':   return parsed.pr?.id
       ? { handled: true, reply: await rehacerCorreccion(parsed.pr.id) }
-      : { handled: true, reply: '¿Cuál corrección rehago? Dime por ejemplo "rehaz la #1" (mira los números con /correcciones).' };
+      : { handled: true, reply: '¿Cuál corrección rehago? Dime por ejemplo "rehaz la #1" (mira los números con "qué correcciones tengo pendientes").' };
+    case 'listar_correcciones':  return { handled: true, reply: formatoListaPendientes(await listPendientes()) };
+    case 'descartar_correccion': return parsed.pr?.id
+      ? { handled: true, reply: await descartarCorreccion(parsed.pr.id) }
+      : { handled: true, reply: '¿Cuál corrección descarto? Dime el número, por ejemplo "descarta la #5".' };
     case 'listar_pacientes':     return listarPacientes(parsed.listado);
     case 'marcar_paciente':      return marcarPaciente(parsed.marcar);
     case 'registrar_paciente':   return registrarPaciente(parsed.paciente_nuevo, text);
+    case 'silenciar_paciente':   return silenciarPaciente(parsed.control_paciente);
+    case 'activar_paciente':     return activarPaciente(parsed.control_paciente);
+    case 'no_tocar':             return noTocar(parsed.control_paciente);
+    case 'dar_de_baja':          return darDeBaja(parsed.control_paciente);
+    case 'agregar_nota_paciente': return agregarNotaPaciente(parsed.control_paciente);
+    case 'atender_lead':         return atenderLead(parsed.control_paciente);
+    case 'reconectar_lead':      return reconectarLead(parsed.control_paciente);
+    case 'consultar_metricas':   return consultarMetricas();
+    case 'coordinar_paquete':    return coordinarPaquete(parsed.coordinacion);
+    case 'coordinar_cita':       return coordinarCita(parsed.coordinacion);
     case 'registrar_finanza':    return registrarFinanza(parsed.finanza, text);
     case 'agregar_recordatorio': return agregarRecordatorio(parsed.recordatorio, text);
     case 'completar_recordatorio': return completarRecordatorio(parsed.completar);
