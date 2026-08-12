@@ -43,6 +43,7 @@ import { aprobarPR, rehacerCorreccion, listPendientes, formatoListaPendientes, d
 import {
   cmdSilenciar, cmdActivar, cmdNoTocar, cmdRemovePatient, cmdAddNote, cmdAtenderLead,
   cmdReconectar, cmdMetricas, cmdPaquete, cmdAgendar, cmdConfirmar, cmdCancelar, hasPendingEnvio,
+  cmdSticker, cmdGrupos, cmdRetomarLead, cmdResponderEnNombreDeLead,
 } from './commands.js';
 
 const CLASSIFIER_SYSTEM = `Eres el clasificador del asistente personal "Neura" de Mirai (psicóloga).
@@ -51,7 +52,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 
 Formato exacto:
 {
-  "intent": "aprobar_pr" | "rehacer_correccion" | "listar_correcciones" | "descartar_correccion" | "listar_pacientes" | "marcar_paciente" | "registrar_paciente" | "silenciar_paciente" | "activar_paciente" | "no_tocar" | "dar_de_baja" | "agregar_nota_paciente" | "atender_lead" | "reconectar_lead" | "consultar_metricas" | "coordinar_paquete" | "coordinar_cita" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
+  "intent": "aprobar_pr" | "rehacer_correccion" | "listar_correcciones" | "descartar_correccion" | "listar_pacientes" | "marcar_paciente" | "registrar_paciente" | "silenciar_paciente" | "activar_paciente" | "no_tocar" | "dar_de_baja" | "agregar_nota_paciente" | "atender_lead" | "retomar_lead_saludado" | "responder_como_si" | "reconectar_lead" | "consultar_metricas" | "coordinar_paquete" | "coordinar_cita" | "configurar_sticker" | "listar_grupos" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
   "finanza": [{ "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null }] | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
@@ -79,6 +80,7 @@ Formato exacto:
   "marcar": { "name": string, "es_paciente": boolean } | null,
   "pr": { "id": number | null } | null,
   "control_paciente": { "patient_name": string | null, "phone": string | null, "nota": string | null } | null,
+  "sticker": { "accion": "parar" | "retomar" | "estado" } | null,
   "coordinacion": { "patient_name": string, "sessions": number | null, "objetivo": string | null } | null,
   "contacto": { "person": string } | null,
   "espiritual": { "kind": "gratitud" | "reflexion" | "oracion" | "lectura", "content": string } | null,
@@ -169,8 +171,12 @@ Reglas:
 - DAR DE BAJA A UN PACIENTE (DEFINITIVO — Mia deja de responderle PARA SIEMPRE, no es una pausa; úsalo solo si Mirai lo pide claro): "dale de baja a X / termina el seguimiento de X / ya no sigas con X, ciérralo / X ya no vuelve, bórrala de mi lista para siempre" → dar_de_baja. control_paciente.patient_name = paciente. (Ojo: si solo dice "X ya no es mi paciente" sin más énfasis, eso es marcar_paciente con es_paciente false — vuelve a leads pero Mia AÚN puede hablarle. dar_de_baja es más fuerte: silencio total.)
 - AGREGAR NOTA A UN PACIENTE (un dato o detalle sobre SU FICHA, no una nota general): "anota en la ficha de X que… / agrégale una nota a X: … / apunta sobre X que…" → agregar_nota_paciente. control_paciente.patient_name = paciente; control_paciente.nota = el contenido tal cual. (Ojo: "apunta que <dato suelto, sin nombrar paciente>" es guardar_nota, no esto.)
 - ATENDER UN LEAD NUEVO (alguien que te escribió directo, fuera del flujo normal, y quieres que Mia lo tome como lead + le mande el saludo de bienvenida): "atiende a X, su número es 999... / activa el saludo para X / que Mia salude a X, escribió directo" → atender_lead. control_paciente.patient_name = nombre; control_paciente.phone = el número (requerido).
+- RETOMAR UN LEAD YA SALUDADO POR TI (Mirai YA lo saludó manualmente fuera de Mia y quiere que Mia siga la conversación SIN volver a presentarse — distinto de atender_lead, que sí manda el saludo): "ya saludé a X yo misma, que Mia siga sin repetir el saludo, su número es 999... / retómalo, ya le escribí / continúa con X, ya la contacté yo" → retomar_lead_saludado. control_paciente.patient_name = nombre; control_paciente.phone = el número (requerido).
+- RESPONDER "COMO SI" (Mirai copia/pega algo que el lead YA le escribió fuera de Mia, y quiere que Mia lo procese YA MISMO y responda de una — acción real e inmediata, úsala solo con una frase MUY explícita de este tipo): "que Mia responda como si X hubiera dicho: <texto> / procesa esto como si lo hubiera mandado X: <texto> / hazle como que X escribió <texto> y respóndele" → responder_como_si. control_paciente.patient_name = paciente; control_paciente.nota = el texto exacto que "escribió" el lead.
 - RECONECTAR CON UN LEAD/PACIENTE (Mia REDACTA un mensaje cálido retomando el hilo de la conversación guardada — para cuando quedó pendiente o Mirai no llegó a responder): "redáctale un mensaje a X para retomar el contacto / escríbele a X para reconectar / retoma la conversación con X (menciónale la beca de S/45)" → reconectar_lead. control_paciente.patient_name = paciente; control_paciente.nota = alguna indicación extra que dé para orientar el mensaje (o null). Antes de enviar, Mia te muestra la vista previa — le respondes "sí" o "no".
 - CONSULTAR MÉTRICAS DEL EMBUDO (Instagram + leads + conversión, NO es lo mismo que consultar_trabajo de GDH): "cómo van mis métricas / cómo va el embudo / cuántos leads entraron esta semana por la pauta / dame las métricas" → consultar_metricas.
+- CONFIGURAR LOS STICKERS DE CONTROL (elegir qué sticker pausa/reactiva a Mia con un paciente — Mia te pide que le mandes el sticker DESPUÉS, esto solo arma la captura): "quiero elegir el sticker para parar a Mia / configura el sticker que la silencia / pon el sticker de retomar / cómo están mis stickers / ya configuré los stickers?" → configurar_sticker. sticker.accion = "parar" (elegir el de pausar), "retomar" (elegir el de reactivar), o "estado" (solo consultar cómo están, incluye "cómo van" sin decir cuál).
+- LISTAR GRUPOS QUE MIA VIO (utilidad técnica, para configurar el grupo de ITACA): "qué grupos ha visto Mia / dame los JIDs de los grupos / lista de grupos" → listar_grupos.
 - AGREGAR PERSONA: "agrega a mi mamá / registra a mi amiga X / anota a mi pareja Y (cumple el <fecha>, su número es ...)" → agregar_persona. persona.name = nombre; persona.relation = vínculo (mamá, pareja, amiga, hermano...); persona.phone si lo da; persona.birthday = ISO YYYY-MM-DD si la da.
 - CONTACTO YA HECHO (pasado): "llamé a mi mamá / hablé con X / le escribí a Y / vi a Z / almorcé con W" → contacto_persona. contacto.person = a quién. (Ojo: "recuérdame llamar a X" es recordatorio; "agrega a X" es agregar_persona.)
 - ESPIRITUAL (GUARDAR algo espiritual): "hoy agradezco por / doy gracias por / estoy agradecida por" → espiritual, kind "gratitud". "guarda esta oración / quiero orar por" → kind "oracion". "esta lectura / este versículo" → kind "lectura". "una reflexión espiritual / algo que sentí en mi fe" → kind "reflexion".
@@ -367,6 +373,33 @@ async function atenderLead(cp) {
   return fromCmd(await cmdAtenderLead(`${phone} ${cp.patient_name.trim()}`));
 }
 
+async function retomarLeadSaludado(cp) {
+  const phone = normalizePhone(cp?.phone);
+  if (!phone || !cp?.patient_name?.trim()) return { handled: true, reply: 'Dame el nombre Y el número — ya lo saludaste tú y quieres que Mia siga sin repetirlo 🙂' };
+  return fromCmd(await cmdRetomarLead(`${phone} ${cp.patient_name.trim()}`));
+}
+
+// Inyecta un texto como si el paciente lo hubiera mandado AHORA — Mia lo
+// procesa y responde de una. Acción real e inmediata, por eso exige nombre +
+// texto explícitos (ver rule RESPONDER "COMO SI").
+async function responderComoSi(cp) {
+  if (!cp?.patient_name || !cp?.nota?.trim()) {
+    return { handled: true, reply: 'Dime el nombre y el texto exacto, así: "que Mia responda como si Fran hubiera dicho: sí, para mí" 🙂' };
+  }
+  const { patient, error } = await resolvePatient(cp.patient_name);
+  if (error) return { handled: true, reply: error };
+  return fromCmd(await cmdResponderEnNombreDeLead(`${patient.phone} ${cp.nota.trim()}`));
+}
+
+function configurarSticker(s) {
+  const accion = s?.accion === 'parar' ? 'parar' : s?.accion === 'retomar' ? 'retomar' : 'estado';
+  return fromCmd(cmdSticker(accion));
+}
+
+function listarGrupos() {
+  return fromCmd(cmdGrupos());
+}
+
 async function reconectarLead(cp) {
   if (!cp?.patient_name) return { handled: true, reply: '¿Con quién reconecto? Dime el nombre 🙂' };
   const { patient, error } = await resolvePatient(cp.patient_name);
@@ -450,10 +483,14 @@ export async function handleNeuraInstruction(text) {
     case 'dar_de_baja':          return darDeBaja(parsed.control_paciente);
     case 'agregar_nota_paciente': return agregarNotaPaciente(parsed.control_paciente);
     case 'atender_lead':         return atenderLead(parsed.control_paciente);
+    case 'retomar_lead_saludado': return retomarLeadSaludado(parsed.control_paciente);
+    case 'responder_como_si':    return responderComoSi(parsed.control_paciente);
     case 'reconectar_lead':      return reconectarLead(parsed.control_paciente);
     case 'consultar_metricas':   return consultarMetricas();
     case 'coordinar_paquete':    return coordinarPaquete(parsed.coordinacion);
     case 'coordinar_cita':       return coordinarCita(parsed.coordinacion);
+    case 'configurar_sticker':   return configurarSticker(parsed.sticker);
+    case 'listar_grupos':        return listarGrupos();
     case 'registrar_finanza':    return registrarFinanza(parsed.finanza, text);
     case 'agregar_recordatorio': return agregarRecordatorio(parsed.recordatorio, text);
     case 'completar_recordatorio': return completarRecordatorio(parsed.completar);

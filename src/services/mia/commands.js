@@ -392,7 +392,7 @@ export async function cmdNoTocar(rest) {
 // Tras armar la captura, el PRÓXIMO sticker que Mirai mande desde su WhatsApp de
 // trabajo (a cualquier chat privado, p. ej. a sí misma) se guarda como ese tipo.
 // Luego, mandarle ese sticker a un paciente para/retoma a Mia con él.
-function cmdSticker(rest) {
+export function cmdSticker(rest) {
   const sub = (rest || '').trim().toLowerCase().split(/\s+/)[0];
 
   if (['parar', 'stop', 'silenciar', 'callar'].includes(sub)) {
@@ -445,7 +445,7 @@ export async function cmdAddNote(rest) {
   return reply(`✓ Nota agregada a ${updated.nombre}.`);
 }
 
-async function cmdRetomarLead(rest) {
+export async function cmdRetomarLead(rest) {
   // /retomar <phone> <nombre>
   // Para cuando ya saludaste manualmente al lead desde kiramkt antes de
   // agregarlo. Mia lo agrega, finge que ya saludó (inserta marker en
@@ -504,7 +504,7 @@ async function cmdRetomarLead(rest) {
   );
 }
 
-async function cmdResponderEnNombreDeLead(rest) {
+export async function cmdResponderEnNombreDeLead(rest) {
   // /responder <phone> <texto que el lead ya escribió>
   // Útil cuando el lead ya respondió fuera de Mia (ej: respondió a un saludo
   // manual que Mirai le hizo antes del intake). Mia procesa el texto como
@@ -1017,7 +1017,7 @@ export async function cmdDescartar(rest) {
   return reply(await descartarCorreccion(id));
 }
 
-function cmdGrupos() {
+export function cmdGrupos() {
   const grupos = getRecentGroups();
   if (!grupos.length) {
     return reply('Todavía no vi mensajes de ningún grupo. Manda un mensaje en el grupo "conversemos las tres" y vuelve a probar /grupos.');
