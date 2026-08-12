@@ -7,6 +7,7 @@ import { config } from '../../config.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
 import { sendText } from '../../lib/evolution.js';
 import { rememberMiaSentId } from './echoTracker.js';
+import { getFinanceToday } from './financeSheet.js';
 
 // Inicio del día de HOY en Lima (UTC-5), como ISO, para filtrar por created_at.
 function inicioHoyLima() {
@@ -54,15 +55,23 @@ export async function runResumenDiario({ dry = false } = {}) {
   // registrar ingresos/egresos, así que el cierre del día se lo pregunta. Va
   // como mensaje APARTE para que pueda responder por voz y Neura lo registre.
   // Si ya anotó movimientos hoy, no la molesta: solo confirma y deja la puerta.
+  // Fuente 1: Supabase (costos del consultorio, quick-add del panel — lo que
+  // NO pasa por voz). Fuente 2: la hoja "Neura - Finanzas" (todo lo que Mia
+  // registra por voz/foto desde el 18 jul 2026 — ver [[neura-finanzas-sheets]]).
   const { data: movs } = await miraiSupabase
     .from('finances').select('direction, amount').gte('occurred_at', desde).limit(200);
-  const hechos = movs ?? [];
-  const ingresos = hechos.filter(m => m.direction === 'ingreso').reduce((s, m) => s + Number(m.amount || 0), 0);
-  const egresos  = hechos.filter(m => m.direction === 'egreso').reduce((s, m) => s + Number(m.amount || 0), 0);
+  const hechosSupabase = movs ?? [];
+  const ingresosSb = hechosSupabase.filter(m => m.direction === 'ingreso').reduce((s, m) => s + Number(m.amount || 0), 0);
+  const gastosSb    = hechosSupabase.filter(m => m.direction === 'gasto').reduce((s, m) => s + Number(m.amount || 0), 0);
 
-  const textoPlata = hechos.length
+  const hoja = await getFinanceToday(); // { count, ingresos, gastos } | null si falló
+  const totalMovs = hechosSupabase.length + (hoja?.count ?? 0);
+  const ingresos = ingresosSb + (hoja?.ingresos ?? 0);
+  const egresos  = gastosSb + (hoja?.gastos ?? 0);
+
+  const textoPlata = totalMovs
     ? [
-        `💰 *Hoy registraste ${hechos.length} movimiento(s)*`,
+        `💰 *Hoy registraste ${totalMovs} movimiento(s)*`,
         `   ↑ ingresos: S/${ingresos.toFixed(2)}   ↓ gastos: S/${egresos.toFixed(2)}`,
         '',
         '¿Se te quedó algo fuera? Dímelo y lo anoto.',
@@ -79,7 +88,7 @@ export async function runResumenDiario({ dry = false } = {}) {
         'Que descanses 🌸',
       ].join('\n');
 
-  if (dry) return { ok: true, dry: true, texto, textoPlata, leads: (nuevos || []).length, atendidos, guias: guias ?? 0, movimientos: hechos.length };
+  if (dry) return { ok: true, dry: true, texto, textoPlata, leads: (nuevos || []).length, atendidos, guias: guias ?? 0, movimientos: totalMovs };
 
   try {
     const sent = await sendText(`${config.mia.personalPhone}@s.whatsapp.net`, texto);

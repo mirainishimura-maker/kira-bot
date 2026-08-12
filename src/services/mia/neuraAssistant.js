@@ -48,7 +48,7 @@ quiere y devuelve SOLO un JSON válido, sin ningún texto extra.
 Formato exacto:
 {
   "intent": "aprobar_pr" | "rehacer_correccion" | "listar_pacientes" | "marcar_paciente" | "registrar_paciente" | "registrar_finanza" | "agregar_recordatorio" | "completar_recordatorio" | "consultar_agenda" | "nota_sesion" | "registrar_pago" | "consultar_gdh" | "registrar_trabajo" | "consultar_trabajo" | "reporte_gdh" | "reporte" | "reporte_pdf" | "registrar_cargo" | "consultar_deudas" | "consultar_finanzas" | "consultar_saldo" | "ajustar_saldo" | "registrar_deuda" | "abonar_deuda" | "consultar_deuda_personal" | "crear_meta" | "aportar_meta" | "consultar_metas" | "consultar_plan" | "registrar_pago_fijo" | "consultar_pagos_fijos" | "agendar_cita" | "reprogramar_cita" | "cancelar_cita" | "bloquear_agenda" | "desbloquear_agenda" | "consultar_bloqueos" | "consultar_semana" | "posponer_recordatorio" | "consultar_paciente" | "crear_paquete" | "consultar_paquete" | "guardar_nota" | "consultar_nota" | "registrar_animo" | "consultar_animo" | "escribir_diario" | "consultar_diario" | "registrar_habito" | "agregar_persona" | "contacto_persona" | "espiritual" | "reflexion" | "ayuda" | "buscar" | "ninguno",
-  "finanza": { "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null } | null,
+  "finanza": [{ "direction": "gasto" | "ingreso", "amount": number, "category": string, "description": string, "account": string | null }] | null,
   "saldo": { "account": string | null, "amount": number | null } | null,
   "deuda": { "counterparty": string, "direction": "debo" | "me_deben" | null, "amount": number | null, "currency": "PEN" | "USD" | null } | null,
   "meta": { "name": string, "target": number | null, "amount": number | null, "currency": "PEN" | "USD" | null, "target_date": string | null } | null,
@@ -82,7 +82,8 @@ Formato exacto:
 Reglas:
 - GASTO: "gasté / compré / pagué / me costó ... soles" → registrar_finanza, direction "gasto".
   category de gasto: EXACTAMENTE una de [Antojos, Comida, Transporte, Salud, Casa, Servicios, Ocio, Otros].
-- INGRESO general (SIN nombre de persona): "cobré / me depositaron / ingresó ..." → registrar_finanza, direction "ingreso", category "Otros" o "Consulta".
+- INGRESO general (SIN nombre de persona): "cobré / me depositaron / ingresó / me prestaron / me depositó <persona> ..." → registrar_finanza, direction "ingreso", category "Otros" o "Consulta".
+- VARIOS MOVIMIENTOS EN UN SOLO MENSAJE: "finanza" es SIEMPRE una LISTA — si el mensaje menciona varios gastos y/o ingresos (ej. un listado de compras, varios cargos de tarjeta, un gasto y luego un depósito), incluye TODOS como elementos separados de la lista. NO te quedes solo con el primero.
 - PAGO DE PACIENTE (menciona un NOMBRE de persona que paga): "me pagó Ana ... / Ana me pagó / Rosa abonó ... soles" → registrar_pago.
   pago.patient_name = el nombre. pago.amount = número en soles. pago.method = "yape"|"plin"|"efectivo"|"transferencia"|null.
 - amount: solo el número, en soles (PEN). description: muy breve.
@@ -106,7 +107,7 @@ Reglas:
 - CARGO / DEUDA DE PACIENTE (lo que un paciente DEBE, NO lo que pagó): "X me debe 105 / cóbrale a X / X quedó debiendo / ponle una sesión pendiente a X / X tiene 2 sesiones sin pagar" → registrar_cargo. cargo.patient_name = nombre. cargo.amount = soles si lo dice, si no null. cargo.sessions = número de sesiones si lo menciona (o null). cargo.concept = breve (o null). (Ojo: "me pagó / me abonó" es registrar_pago, no cargo.)
 - CONSULTAR DEUDAS: "quién me debe / quiénes están debiendo / saldos / cuánto me deben / quién tiene pendiente de pago" → consultar_deudas.
 - CONSULTAR FINANZAS: "en qué se me fue la plata / resumen de mis finanzas / cuánto gasté esta semana / mis gastos / cómo voy de plata" → consultar_finanzas.
-- MOVIMIENTO CON CUENTA: en registrar_finanza, si menciona una cuenta o medio ("con el BBVA / del BCP / en efectivo / con Yape / con la tarjeta Saga / con el crédito Yape"), pon finanza.account = el nombre de la cuenta (BCP, BBVA, Yape, Efectivo, Saga Falabella, Crédito Yape). Si no la menciona, account = null.
+- MOVIMIENTO CON CUENTA: en registrar_finanza, si menciona una cuenta o medio ("con el BBVA / del BCP / en efectivo / con Yape / con la tarjeta Saga / con el crédito Yape"), pon account = el nombre EXACTO de la cuenta (BCP, BBVA, Yape, Efectivo, Saga Falabella, Crédito Yape) en ESE elemento de la lista. Si dice solo "mi tarjeta de crédito" sin decir cuál (y tiene más de una), deja account = null — no adivines. Si una frase aclara que VARIOS gastos anteriores son de una cuenta específica ("esos cinco son de mi tarjeta Saga"), aplica esa cuenta a CADA uno de esos elementos. Si no menciona cuenta, account = null.
 - CONSULTAR SALDO: "cuánto tengo en el BBVA / cuánto hay en el BCP / cuánto tengo en total / mis cuentas / cuánta plata tengo" → consultar_saldo. saldo.account = la cuenta, o null si pregunta por el total/todas.
 - AJUSTAR SALDO (DECLARA cuánto hay en una cuenta, no es un gasto/ingreso): "tengo 50 en el BBVA / mi saldo del BCP es 6 / pon el efectivo en 20 / en el Yape tengo 100" → ajustar_saldo. saldo.account = cuenta; saldo.amount = el monto.
 - REGISTRAR DEUDA/PRÉSTAMO PERSONAL (NO un paciente): "le debo 500 a César / César me prestó 500 / le presté 200 a mi hermano / me prestaron 1000" → registrar_deuda. deuda.counterparty = la persona; deuda.amount = monto; deuda.currency = "USD" si son dólares, si no "PEN".
@@ -444,34 +445,48 @@ async function escritoDesdeFoto(info, media) {
   return { handled: true, reply: `📔 Transcribí y guardé en tu diario${fotoPath ? ' (con la foto)' : ''}:\n\n"${preview}"\n\nLo ves en Neura → Bienestar → Diario ✦` };
 }
 
-async function registrarFinanza(f, raw) {
-  if (!f) return { handled: false };
-  const amount = Number(f.amount);
-  if (!Number.isFinite(amount) || amount <= 0) {
-    return { handled: true, reply: '¿Cuánto fue? Dímelo así: "gasté 8 soles en un café" 🙂' };
+// `items` puede traer VARIOS movimientos en un solo mensaje (ej: un listado de
+// cargos de tarjeta). Aceptamos también un objeto suelto por compatibilidad,
+// por si el modelo no envuelve en lista.
+async function registrarFinanza(items, raw) {
+  const lista = Array.isArray(items) ? items : (items ? [items] : []);
+  if (!lista.length) return { handled: false };
+
+  const anotados = [];
+  let fallaron = 0;
+  for (const f of lista) {
+    const amount = Number(f?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const direction = f.direction === 'ingreso' ? 'ingreso' : 'gasto';
+    const category = (f.category || 'Otros').trim();
+    // Cuenta opcional ("...con el BBVA / en efectivo"): solo va como ETIQUETA
+    // en la hoja — a diferencia de Finanzas v2 (ajustar_saldo), esto ya NO
+    // actualiza el saldo de la cuenta en Neura (decisión de Mirai: ingresos/
+    // gastos sueltos viven solo en la hoja de cálculo, no en Supabase).
+    let accountName = null;
+    if (f.account && f.account.trim()) {
+      const r = await resolveAccount(f.account);
+      if (r.account) accountName = r.account.name;
+    }
+    const r = await logFinanceToSheet({
+      direction, amount, category,
+      description: f.description?.trim() || null,
+      account: accountName, source: 'voz',
+    });
+    if (!r.ok) { console.error('[neura] finanza sheet:', r.error); fallaron++; continue; }
+    const emoji = direction === 'ingreso' ? '💰' : '💸';
+    const desc = f.description ? ` (${f.description.trim()})` : '';
+    const cuenta = accountName ? ` · ${accountName}` : '';
+    anotados.push(`${emoji} ${money(amount)} · ${category}${desc}${cuenta}`);
   }
-  const direction = f.direction === 'ingreso' ? 'ingreso' : 'gasto';
-  const category = (f.category || 'Otros').trim();
-  // Cuenta opcional ("...con el BBVA / en efectivo"): solo va como ETIQUETA en
-  // la hoja — a diferencia de Finanzas v2 (ajustar_saldo), esto ya NO actualiza
-  // el saldo de la cuenta en Neura (decisión de Mirai: ingresos/gastos sueltos
-  // viven solo en la hoja de cálculo, no en Supabase).
-  let accountName = null;
-  if (f.account && f.account.trim()) {
-    const r = await resolveAccount(f.account);
-    if (r.account) accountName = r.account.name;
+
+  if (!anotados.length) {
+    return { handled: true, reply: fallaron ? 'Uy, no pude anotarlo en tu hoja ahora. ¿Me lo repites en un momento?' : '¿Cuánto fue? Dímelo así: "gasté 8 soles en un café" 🙂' };
   }
-  const r = await logFinanceToSheet({
-    direction, amount, category,
-    description: f.description?.trim() || null,
-    account: accountName, source: 'voz',
-  });
-  if (!r.ok) { console.error('[neura] finanza sheet:', r.error); return { handled: true, reply: 'Uy, no pude anotarlo en tu hoja ahora. ¿Me lo repites en un momento?' }; }
-  const emoji = direction === 'ingreso' ? '💰' : '💸';
-  const verbo = direction === 'ingreso' ? 'Ingreso' : 'Gasto';
-  const desc = f.description ? ` (${f.description.trim()})` : '';
-  const cuenta = accountName ? ` · ${accountName}` : '';
-  return { handled: true, reply: `${emoji} ${verbo} anotado: ${money(amount)} · ${category}${desc}${cuenta}.\nLo ves en tu hoja de Finanzas ✦` };
+  const aviso = fallaron ? `\n(${fallaron} no se pudo anotar, reinténtalo)` : '';
+  const cuerpo = anotados.length === 1 ? anotados[0] : anotados.map((a) => `• ${a}`).join('\n');
+  const titulo = anotados.length === 1 ? '' : `Anotados ${anotados.length} movimientos:\n`;
+  return { handled: true, reply: `${titulo}${cuerpo}${aviso}\nLo ves en tu hoja de Finanzas ✦` };
 }
 
 async function agregarRecordatorio(r, raw) {
@@ -1020,10 +1035,11 @@ async function extraerYRegistrarFinanzas(text) {
       model: MIA_MODEL, temperature: 0, response_format: { type: 'json_object' },
       messages: [
         { role: 'system', content: `Extrae SOLO transacciones financieras EXPLÍCITAS y YA OCURRIDAS del mensaje de Mirai (psicóloga). Devuelve JSON:
-{"pagos":[{"patient_name":string,"amount":number}],"cargos":[{"patient_name":string,"amount":number}],"gastos":[{"amount":number,"category":string,"description":string}]}
+{"pagos":[{"patient_name":string,"amount":number}],"cargos":[{"patient_name":string,"amount":number}],"gastos":[{"amount":number,"category":string,"description":string}],"ingresos":[{"amount":number,"category":string,"description":string}]}
 - pago = un paciente le PAGÓ/abonó N soles.
 - cargo = un paciente le DEBE / quedó debiendo N soles.
 - gasto = Mirai gastó/compró/pagó N soles (gasto personal).
+- ingreso = a Mirai le entró/depositaron/cobró/prestaron N soles (que NO sea de un paciente — eso es "pago").
 - patient_name = el nombre de la PACIENTE. Si dice "papá/mamá de X", la paciente es X.
 NO incluyas preguntas, hipótesis, precios que solo consulta, ni totales que solo comenta. Si no hay transacciones claras y ocurridas, deja todo vacío. Devuelve SOLO el JSON.` },
         { role: 'user', content: text },
@@ -1054,6 +1070,12 @@ NO incluyas preguntas, hipótesis, precios que solo consulta, ni totales que sol
     if (!Number.isFinite(amount) || amount <= 0) continue;
     const r = await logFinanceToSheet({ direction: 'gasto', amount, category: g.category || 'Otros', description: g.description || null, source: 'voz' });
     if (r.ok) saved.push(`💸 gasto ${money(amount)}`);
+  }
+  for (const i of parsed.ingresos ?? []) {
+    const amount = Number(i.amount);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    const r = await logFinanceToSheet({ direction: 'ingreso', amount, category: i.category || 'Otros', description: i.description || null, source: 'voz' });
+    if (r.ok) saved.push(`💰 ingreso ${money(amount)}`);
   }
   return saved;
 }

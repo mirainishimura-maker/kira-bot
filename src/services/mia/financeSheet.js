@@ -16,32 +16,43 @@ export function isFinanceSheetEnabled() {
   return Boolean(URL && SECRET);
 }
 
-// data: { direction: 'ingreso'|'gasto', amount, category, description, account, source }
-export async function logFinanceToSheet(data) {
+async function callSheet(action, payload) {
   if (!isFinanceSheetEnabled()) {
-    console.log('[neura/finsheet] omitido: falta MIA_SHEET_WEBHOOK_URL o _SECRET');
-    return { ok: false, error: 'no configurado' };
+    console.log(`[neura/finsheet] omitido (${action}): falta MIA_SHEET_WEBHOOK_URL o _SECRET`);
+    return null;
   }
   try {
     const res = await fetch(URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'logFinance', secret: SECRET, data }),
+      body: JSON.stringify({ action, secret: SECRET, ...payload }),
       redirect: 'follow', // Apps Script redirige
     });
     if (!res.ok) {
       const text = await res.text();
-      console.error(`[neura/finsheet] HTTP ${res.status}: ${text.slice(0, 200)}`);
-      return { ok: false, error: `HTTP ${res.status}` };
+      console.error(`[neura/finsheet] ${action} HTTP ${res.status}: ${text.slice(0, 200)}`);
+      return null;
     }
     const json = await res.json();
     if (!json.ok) {
-      console.error(`[neura/finsheet] fail: ${json.error}`);
-      return { ok: false, error: json.error };
+      console.error(`[neura/finsheet] ${action} fail: ${json.error}`);
+      return null;
     }
-    return { ok: true };
+    return json.data;
   } catch (err) {
-    console.error('[neura/finsheet] exception:', err.message);
-    return { ok: false, error: err.message };
+    console.error(`[neura/finsheet] ${action} exception:`, err.message);
+    return null;
   }
+}
+
+// data: { direction: 'ingreso'|'gasto', amount, category, description, account, source }
+export async function logFinanceToSheet(data) {
+  const r = await callSheet('logFinance', { data });
+  return r ? { ok: true } : { ok: false, error: 'no se pudo anotar' };
+}
+
+// Total del día (hora Lima) en la hoja: { count, ingresos, gastos } o null si
+// falla (el resumen diario cae a solo lo de Supabase en ese caso).
+export async function getFinanceToday() {
+  return callSheet('financeToday', {});
 }

@@ -113,6 +113,7 @@ function doPost(e) {
       case 'expireHolds':        return ok(expireHolds());
       // ─── Finanzas (hoja separada) ───
       case 'logFinance':         return ok(logFinance(body.data || {}));
+      case 'financeToday':       return ok(financeToday());
       default:            return err('unknown action: ' + body.action);
     }
   } catch (ex) {
@@ -808,4 +809,25 @@ function logFinance(data) {
     data.source || 'voz',
   ]);
   return { row: sh.getLastRow() };
+}
+
+// Suma los movimientos de HOY (hora Lima) en la hoja — lo usa el resumen
+// diario para no depender solo de Supabase (que ya no recibe estos datos).
+function financeToday() {
+  const sh = getFinanceSheet_();
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return { count: 0, ingresos: 0, gastos: 0 };
+  const values = sh.getRange(2, 1, lastRow - 1, FIN_HEADERS.length).getValues();
+  const hoy = Utilities.formatDate(new Date(), CAL_TZ, 'yyyy-MM-dd');
+  let count = 0, ingresos = 0, gastos = 0;
+  for (let i = 0; i < values.length; i++) {
+    const row = values[i];
+    const fecha = row[0];
+    if (!(fecha instanceof Date)) continue;
+    if (Utilities.formatDate(fecha, CAL_TZ, 'yyyy-MM-dd') !== hoy) continue;
+    count++;
+    const monto = Number(row[2]) || 0;
+    if (row[1] === 'Ingreso') ingresos += monto; else gastos += monto;
+  }
+  return { count: count, ingresos: ingresos, gastos: gastos };
 }
