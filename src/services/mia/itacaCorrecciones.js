@@ -395,6 +395,29 @@ export function formatoListaPendientes(tickets) {
   return `*Correcciones ITACA pendientes:*\n\n${lineas.join('\n')}\n\nDile a Mia "apruebo la #N" para implementar, o "descarta la #N".`;
 }
 
+// Mensaje que Mirai reenvía TAL CUAL al grupo. Mia no escribe en el grupo (lee
+// en silencio y el equipo no sabe que está ahí), así que el aviso sale de ella:
+// va como mensaje aparte, sin nada alrededor, para reenviarlo sin editar.
+export function textoParaElGrupo(tickets) {
+  const lineas = tickets.map((t) => `• ${t.titulo}`).join('\n');
+  const cierre = tickets.length === 1
+    ? '¿Lo pueden revisar y me dicen si quedó bien? 🙏'
+    : '¿Los pueden revisar y me dicen si quedó todo bien? 🙏';
+  return `Chicas, ya está corregido en el sistema:\n\n${lineas}\n\n${cierre}`;
+}
+
+// Un solo aviso por tanda: si se mergean cinco correcciones seguidas, Mirai
+// recibe un mensaje —no cinco— y debajo el texto listo para reenviar.
+async function avisarProduccion(tickets) {
+  const ids = tickets.map((t) => `#${t.id}`).join(', ');
+  const cabecera = tickets.length === 1
+    ? `✅ *Corrección ${ids} ya está en producción* ("${tickets[0].titulo}").`
+    : `✅ *${tickets.length} correcciones ya están en producción* (${ids}):\n\n`
+      + tickets.map((t) => `• *#${t.id}* — ${t.titulo}`).join('\n');
+  await avisarMirai(`${cabecera}\n\n👇 Te dejo el mensaje listo para reenviar al grupo.`);
+  await avisarMirai(textoParaElGrupo(tickets));
+}
+
 // ---------------------------------------------------------------------------
 // Seguimiento de PRs (cron): avisa cuándo revisar y cuándo ya está en producción
 // ---------------------------------------------------------------------------
@@ -412,6 +435,7 @@ export async function chequearPRs() {
   if (error) { console.error('[itaca] chequearPRs list error:', error.message); return { error: error.message }; }
 
   let notified = 0;
+  const enProduccion = [];  // las que se mergearon en esta pasada (aviso agrupado)
   for (const t of data ?? []) {
     if (!t.issue_number) continue;
     let pr = t.pr_number ? await getPR(t.pr_number) : await findLinkedPR(t.issue_number);
@@ -452,7 +476,9 @@ export async function chequearPRs() {
     }
     if (t.estado === 'pr_abierto' && pr.merged) {
       await updateTicket(t.id, { estado: 'en_produccion', pr_number: pr.number, pr_url: pr.url });
-      await avisarMirai(`✅ *Corrección #${t.id} ya está en producción* ("${t.titulo}").\nAvísale a ${t.autor || 'quien la pidió'} que revise el sistema y te dé feedback 🌸`);
+      // No se avisa una por una: se juntan y va UN solo mensaje al final, con el
+      // texto listo para reenviar al grupo (así el equipo lo revisa todo de golpe).
+      enProduccion.push(t);
       notified++;
       continue;
     }
@@ -462,6 +488,7 @@ export async function chequearPRs() {
       notified++;
     }
   }
+  if (enProduccion.length) await avisarProduccion(enProduccion);
   return { checked: (data ?? []).length, notified };
 }
 
