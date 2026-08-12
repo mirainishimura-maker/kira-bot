@@ -32,6 +32,12 @@
 //      Version: New version → Deploy. Así las acciones de calendario quedan
 //      publicadas en la MISMA URL (no cambia el MIA_SHEET_WEBHOOK_URL).
 //      (Ver el bloque CALENDARIO más abajo para el detalle.)
+//
+// SETUP DE FINANZAS (hacer también una vez):
+//  11. Ejecutar setupFinanceSheet() → crea la hoja "Neura - Finanzas" APARTE
+//      (nunca mezclada con este CRM ni con otras hojas tuyas).
+//  12. Re-deployar (igual que el paso 10) para publicar la acción logFinance.
+//      (Ver el bloque FINANZAS más abajo para el detalle.)
 // =====================================================================
 
 const SHEET_NAME = 'Leads';
@@ -105,6 +111,8 @@ function doPost(e) {
       case 'listBlocks':         return ok(listBlocks(body.data || {}));
       case 'unblockTime':        return ok(unblockTime(body.data || {}));
       case 'expireHolds':        return ok(expireHolds());
+      // ─── Finanzas (hoja separada) ───
+      case 'logFinance':         return ok(logFinance(body.data || {}));
       default:            return err('unknown action: ' + body.action);
     }
   } catch (ex) {
@@ -734,4 +742,70 @@ function unblockTime(data) {
     if (ev.getTitle().indexOf(BLOCK_PREFIX) === 0) { ev.deleteEvent(); deleted++; }
   }
   return { deleted: deleted };
+}
+
+// =====================================================================
+// FINANZAS (hoja separada) — ingresos/egresos genéricos que Mirai dicta
+// =====================================================================
+// Vive en una hoja de cálculo NUEVA y APARTE de este CRM (y de cualquier
+// otra hoja, como la de contraseñas). El script no está "bound" a ella —
+// la abre por ID (SpreadsheetApp.openById), guardado en Script Properties,
+// igual que MIA_CALENDAR_ID para el calendario.
+//
+// SETUP (una vez, desde el editor):
+//   1. Ejecutar setupFinanceSheet() → crea "Neura - Finanzas" en tu Drive,
+//      pestaña "Movimientos" con encabezados. La URL queda en el log
+//      (Ver → Registros de ejecución, o Ejecución → Ver registros).
+//   2. Re-deployar el Web app (Deploy → Manage deployments → editar el
+//      deployment → Version: New version → Deploy) para publicar la
+//      acción logFinance en la MISMA URL de siempre.
+// =====================================================================
+
+const FIN_SHEET_PROP_KEY = 'MIA_FINANCE_SHEET_ID';
+const FIN_TAB_NAME = 'Movimientos';
+const FIN_HEADERS = ['Fecha', 'Tipo', 'Monto', 'Categoría', 'Descripción', 'Cuenta', 'Fuente'];
+
+function setupFinanceSheet() {
+  const props = PropertiesService.getScriptProperties();
+  const existing = props.getProperty(FIN_SHEET_PROP_KEY);
+  if (existing) {
+    const ss = SpreadsheetApp.openById(existing);
+    Logger.log('Ya existe: ' + ss.getUrl());
+    return 'Ya existe: ' + ss.getUrl();
+  }
+  const ss = SpreadsheetApp.create('Neura - Finanzas');
+  const sh = ss.getSheets()[0];
+  sh.setName(FIN_TAB_NAME);
+  sh.getRange(1, 1, 1, FIN_HEADERS.length).setValues([FIN_HEADERS])
+    .setFontWeight('bold').setBackground('#f1f3f4');
+  sh.setFrozenRows(1);
+  for (let i = 1; i <= FIN_HEADERS.length; i++) sh.setColumnWidth(i, 140);
+  props.setProperty(FIN_SHEET_PROP_KEY, ss.getId());
+  Logger.log('Hoja creada: ' + ss.getUrl());
+  return 'Hoja creada: ' + ss.getUrl();
+}
+
+function getFinanceSheet_() {
+  const id = PropertiesService.getScriptProperties().getProperty(FIN_SHEET_PROP_KEY);
+  if (!id) throw new Error('Hoja de finanzas no configurada — corre setupFinanceSheet() primero.');
+  const ss = SpreadsheetApp.openById(id);
+  return ss.getSheetByName(FIN_TAB_NAME) || ss.insertSheet(FIN_TAB_NAME);
+}
+
+// Agrega una fila de ingreso/egreso. data: { direction, amount, category,
+// description, account, source }. Devuelve { row }: el número de fila escrita.
+function logFinance(data) {
+  if (!data.amount) throw new Error('amount es requerido');
+  const sh = getFinanceSheet_();
+  const tipo = data.direction === 'ingreso' ? 'Ingreso' : 'Gasto';
+  sh.appendRow([
+    new Date(),
+    tipo,
+    Number(data.amount),
+    data.category || '',
+    data.description || '',
+    data.account || '',
+    data.source || 'voz',
+  ]);
+  return { row: sh.getLastRow() };
 }

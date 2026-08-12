@@ -1,7 +1,7 @@
 // NEURA — asistente personal de Mirai (Fase 1 + 2).
 // Interpreta instrucciones en lenguaje natural (voz transcrita o texto) que
 // Mirai le manda a Mia desde su número personal, y las ejecuta:
-//   · registrar un gasto/ingreso   → tabla finances
+//   · registrar un gasto/ingreso   → hoja de cálculo "Neura - Finanzas" (Sheets)
 //   · agregar un recordatorio       → tabla reminders
 //   · consultar su agenda           → calendario (sesiones próximas)
 //   · bloquear su horario           → evento 🚫 BLOQUEO en Google Calendar (no disponible)
@@ -22,6 +22,7 @@ import { miraiOpenai, MIA_MODEL } from '../../lib/miraiOpenai.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
 import { config } from '../../config.js';
 import { analizarFotoMirai } from './media.js';
+import { logFinanceToSheet } from './financeSheet.js';
 import { listUpcomingAppointments, slotLabel, createHold, rescheduleAppointment, cancelAppointment, getUpcoming, isCalendarEnabled, blockRange, listBlocks, unblockRange } from './calendar.js';
 import { runGdhRecap } from './gdhRecap.js';
 import { handleReflexion } from './reflexion.js';
@@ -413,11 +414,11 @@ async function pagoDesdeFoto(pago) {
     }
   }
   // No identifiqué a la paciente por la foto → lo anoto como ingreso y le doy el camino.
-  await miraiSupabase.from('finances').insert({
-    direction: 'ingreso', amount: monto, currency: 'PEN', category: 'Consulta',
-    description: nombre ? `Pago de ${nombre} (foto)` : 'Pago recibido (foto)', source: 'auto', raw_text: 'yape foto',
+  await logFinanceToSheet({
+    direction: 'ingreso', amount: monto, category: 'Consulta',
+    description: nombre ? `Pago de ${nombre} (foto)` : 'Pago recibido (foto)', source: 'auto',
   });
-  return { handled: true, reply: `💰 Leí un pago de *${money(monto)}*${nombre ? ` de ${nombre}` : ''} y lo anoté como ingreso.\nSi es de una paciente y quieres enlazarlo a su ficha, dime "${nombre || 'Ana'} me pagó ${monto}" 🙂` };
+  return { handled: true, reply: `💰 Leí un pago de *${money(monto)}*${nombre ? ` de ${nombre}` : ''} y lo anoté como ingreso en tu hoja de Finanzas.\nSi es de una paciente y quieres enlazarlo a su ficha, dime "${nombre || 'Ana'} me pagó ${monto}" 🙂` };
 }
 
 async function escritoDesdeFoto(info, media) {
@@ -451,24 +452,26 @@ async function registrarFinanza(f, raw) {
   }
   const direction = f.direction === 'ingreso' ? 'ingreso' : 'gasto';
   const category = (f.category || 'Otros').trim();
-  // Cuenta opcional ("...con el BBVA / en efectivo"): la ligamos si la reconocemos.
-  let accountId = null, accountName = null;
+  // Cuenta opcional ("...con el BBVA / en efectivo"): solo va como ETIQUETA en
+  // la hoja — a diferencia de Finanzas v2 (ajustar_saldo), esto ya NO actualiza
+  // el saldo de la cuenta en Neura (decisión de Mirai: ingresos/gastos sueltos
+  // viven solo en la hoja de cálculo, no en Supabase).
+  let accountName = null;
   if (f.account && f.account.trim()) {
     const r = await resolveAccount(f.account);
-    if (r.account) { accountId = r.account.id; accountName = r.account.name; }
+    if (r.account) accountName = r.account.name;
   }
-  const { error } = await miraiSupabase.from('finances').insert({
-    direction, amount, currency: 'PEN',
-    category, description: f.description?.trim() || null,
-    account_id: accountId,
-    source: 'voz', raw_text: raw,
+  const r = await logFinanceToSheet({
+    direction, amount, category,
+    description: f.description?.trim() || null,
+    account: accountName, source: 'voz',
   });
-  if (error) { console.error('[neura] finanza insert:', error.message); return { handled: true, reply: 'Uy, no pude anotarlo ahora. ¿Me lo repites?' }; }
+  if (!r.ok) { console.error('[neura] finanza sheet:', r.error); return { handled: true, reply: 'Uy, no pude anotarlo en tu hoja ahora. ¿Me lo repites en un momento?' }; }
   const emoji = direction === 'ingreso' ? '💰' : '💸';
   const verbo = direction === 'ingreso' ? 'Ingreso' : 'Gasto';
   const desc = f.description ? ` (${f.description.trim()})` : '';
   const cuenta = accountName ? ` · ${accountName}` : '';
-  return { handled: true, reply: `${emoji} ${verbo} anotado: ${money(amount)} · ${category}${desc}${cuenta}.\nLo ves en Neura → Finanzas ✦` };
+  return { handled: true, reply: `${emoji} ${verbo} anotado: ${money(amount)} · ${category}${desc}${cuenta}.\nLo ves en tu hoja de Finanzas ✦` };
 }
 
 async function agregarRecordatorio(r, raw) {
@@ -1049,8 +1052,8 @@ NO incluyas preguntas, hipótesis, precios que solo consulta, ni totales que sol
   for (const g of parsed.gastos ?? []) {
     const amount = Number(g.amount);
     if (!Number.isFinite(amount) || amount <= 0) continue;
-    const { error } = await miraiSupabase.from('finances').insert({ direction: 'gasto', amount, currency: 'PEN', category: g.category || 'Otros', description: g.description || null, source: 'voz', raw_text: text });
-    if (!error) saved.push(`💸 gasto ${money(amount)}`);
+    const r = await logFinanceToSheet({ direction: 'gasto', amount, category: g.category || 'Otros', description: g.description || null, source: 'voz' });
+    if (r.ok) saved.push(`💸 gasto ${money(amount)}`);
   }
   return saved;
 }
