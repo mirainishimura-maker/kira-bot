@@ -327,18 +327,29 @@ function fromCmd(r) {
   return { handled: true, reply: r?.messages?.[0]?.text || '✓ Hecho.' };
 }
 
+// Resuelve control_paciente a un teléfono: usa el número directo si lo dan
+// (ej. pegó un número de un aviso), si no busca por nombre.
+async function resolverTelefono(cp) {
+  const directo = normalizePhone(cp?.phone);
+  if (directo) return { phone: directo };
+  if (cp?.patient_name) {
+    const { patient, error } = await resolvePatient(cp.patient_name);
+    if (error) return { error };
+    return { phone: patient.phone };
+  }
+  return { error: '¿A quién? Dime el nombre o el número 🙂' };
+}
+
 async function silenciarPaciente(cp) {
-  if (!cp?.patient_name) return { handled: true, reply: '¿A quién silencio? Dime el nombre 🙂' };
-  const { patient, error } = await resolvePatient(cp.patient_name);
+  const { phone, error } = await resolverTelefono(cp);
   if (error) return { handled: true, reply: error };
-  return fromCmd(await cmdSilenciar(patient.phone));
+  return fromCmd(await cmdSilenciar(phone));
 }
 
 async function activarPaciente(cp) {
-  if (!cp?.patient_name) return { handled: true, reply: '¿A quién reactivo? Dime el nombre 🙂' };
-  const { patient, error } = await resolvePatient(cp.patient_name);
+  const { phone, error } = await resolverTelefono(cp);
   if (error) return { handled: true, reply: error };
-  return fromCmd(await cmdActivar(patient.phone));
+  return fromCmd(await cmdActivar(phone));
 }
 
 // Contacto personal/de trabajo: acepta nombre (si ya está en el sistema) o
@@ -354,10 +365,9 @@ async function noTocar(cp) {
 }
 
 async function darDeBaja(cp) {
-  if (!cp?.patient_name) return { handled: true, reply: '¿A quién doy de baja? Dime el nombre 🙂' };
-  const { patient, error } = await resolvePatient(cp.patient_name);
+  const { phone, error } = await resolverTelefono(cp);
   if (error) return { handled: true, reply: error };
-  return fromCmd(await cmdRemovePatient(patient.phone));
+  return fromCmd(await cmdRemovePatient(phone));
 }
 
 async function agregarNotaPaciente(cp) {

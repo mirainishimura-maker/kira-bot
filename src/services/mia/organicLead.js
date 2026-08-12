@@ -110,8 +110,7 @@ export async function notifyMiraiAboutOrganicLead({ phone, pushName, text, test,
     `De: ${phone}` + (pushName ? ` (${pushName})` : ''),
     `Escribió: "${truncatedMsg}"`,
     '',
-    '👉 Si NO es un lead (contacto viejo/equivocado), silencialo:',
-    `/silenciar ${phone}`,
+    `👉 Si NO es un lead (contacto viejo/equivocado), dile a Mia: "silencia al ${phone}"`,
   ].join('\n');
 
   try {
@@ -142,7 +141,7 @@ export async function notifyMiraiAboutSilentUnknown({ phone, pushName, text }) {
     `🔔 *Número nuevo escribió y no le respondí* (no detecté intención de consulta)\n\n` +
     `De: ${phone}${pushName ? ` (${pushName})` : ''}\n` +
     `Escribió: ${snippet}\n\n` +
-    `Si es un lead, lo atiendo con:\n/atender ${phone} ${pushName || '<nombre>'}\n` +
+    `Si es un lead, dile a Mia: "atiende a ${pushName || '<nombre>'}, su número es ${phone}"\n` +
     `Si no lo es, ignóralo y no te vuelvo a avisar por él hoy 🌸`;
 
   try {
@@ -171,7 +170,7 @@ export async function notifyMiraiAboutUnidentifiable({ remoteJid, pushName, text
     : '\n(mensaje sin texto o solo multimedia)';
   const aviso =
     `👀 *${quien} me escribió y no pude identificar su número* (WhatsApp lo entrega como ID oculto).${snippet}\n\n` +
-    `Búscalo en tu WhatsApp y, si es un lead, regístralo con:\n/atender <número> <nombre>\ny yo lo atiendo desde su siguiente mensaje 🌸`;
+    `Búscalo en tu WhatsApp y, si es un lead, dile a Mia: "atiende a <nombre>, su número es <número>"\ny lo atiendo desde su siguiente mensaje 🌸`;
 
   try {
     await sendText(`${config.mia.personalPhone}@s.whatsapp.net`, aviso);

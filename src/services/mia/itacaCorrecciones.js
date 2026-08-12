@@ -255,7 +255,7 @@ export async function listPendientes() {
 // ---------------------------------------------------------------------------
 export async function aprobarCorreccion(id) {
   const t = await getTicket(id);
-  if (!t) return `No encontré la corrección #${id}. Usa /correcciones para ver la lista.`;
+  if (!t) return `No encontré la corrección #${id}. Dile a Mia "qué correcciones tengo pendientes" para ver la lista.`;
   if (t.estado === 'descartada')    return `La corrección #${id} está descartada. Si la quieres, primero créala de nuevo.`;
   if (t.estado === 'en_progreso')   return `La corrección #${id} ya está en marcha (esperando que Claude abra el PR).`;
   if (t.estado === 'pr_abierto')    return `La corrección #${id} ya tiene un PR abierto:\n${t.pr_url || '(link en camino)'}`;
@@ -338,7 +338,7 @@ export async function aprobarPR(id = null) {
 // mes desde el celular no es realista.
 export async function rehacerCorreccion(id) {
   const t = await getTicket(id);
-  if (!t) return `No encontré la corrección #${id}. Usa /correcciones para ver la lista.`;
+  if (!t) return `No encontré la corrección #${id}. Dile a Mia "qué correcciones tengo pendientes" para ver la lista.`;
   if (t.estado === 'en_produccion') return `La corrección #${id} ya está en producción ✅, no hace falta rehacerla.`;
   if (!githubReady()) return 'No tengo configurado el acceso a GitHub.';
 
@@ -381,7 +381,7 @@ Instrucciones:
 // Mensajes a Mirai
 // ---------------------------------------------------------------------------
 function formatoNuevaCorreccion(t) {
-  return `📝 *Corrección #${t.id}* — de ${t.autor || 'el equipo'}\n*${t.titulo}*\n\n${t.detalle}\n\nResponde */ok ${t.id}* para implementar, o */descartar ${t.id}*.`;
+  return `📝 *Corrección #${t.id}* — de ${t.autor || 'el equipo'}\n*${t.titulo}*\n\n${t.detalle}\n\nDile a Mia "apruebo la #${t.id}" para implementarla, o "descarta la #${t.id}".`;
 }
 
 export function formatoListaPendientes(tickets) {
@@ -392,7 +392,7 @@ export function formatoListaPendientes(tickets) {
     const extra = t.estado === 'pr_abierto' && t.pr_url ? `\n   → PR: ${t.pr_url}` : '';
     return `${ico} *#${t.id}* (${t.autor || '?'}) — ${t.titulo} _[${t.estado}]_${extra}`;
   });
-  return `*Correcciones ITACA pendientes:*\n\n${lineas.join('\n')}\n\n/ok N para implementar · /descartar N para descartar`;
+  return `*Correcciones ITACA pendientes:*\n\n${lineas.join('\n')}\n\nDile a Mia "apruebo la #N" para implementar, o "descarta la #N".`;
 }
 
 // ---------------------------------------------------------------------------

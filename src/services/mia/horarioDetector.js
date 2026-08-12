@@ -63,9 +63,9 @@ export async function detectarHorarioYAvisar({ phone, nombre, text }) {
       `📅 *Posible cita en un chat*\n` +
       `${quien} (${norm}) escribió:\n"${text.slice(0, 280)}"\n\n` +
       `⏰ Detecté: *${hit}*\n\n` +
-      `Si es una cita, agéndala para que NO se te pase:\n` +
-      `• /agendar ${norm} ${primerNombre}\n` +
-      `• o resérvate el horario: /bloquear <cuándo> ${primerNombre}`;
+      `Si es una cita, dile a Mia para que NO se te pase:\n` +
+      `• "agéndame a ${primerNombre} el <día/hora>"\n` +
+      `• o resérvate el horario: "bloquéame el <cuándo>, ${primerNombre}"`;
 
     const sent = await sendText(`${config.mia.personalPhone}@s.whatsapp.net`, aviso);
     if (sent?.key?.id) rememberMiaSentId(sent.key.id);
