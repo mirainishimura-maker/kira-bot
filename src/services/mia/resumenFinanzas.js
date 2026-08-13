@@ -8,6 +8,7 @@ import { config } from '../../config.js';
 import { miraiSupabase } from '../../lib/miraiSupabase.js';
 import { anthropic, CLAUDE_MODEL } from '../../lib/anthropic.js';
 import { sendPrivate } from '../../lib/evolution.js';
+import { getFinanceRange } from './financeSheet.js';
 
 const money = (n) => `S/ ${Number(n).toFixed(2)}`;
 
@@ -42,10 +43,15 @@ export async function buildResumenFinanzas({ period = 'semana' } = {}) {
   const since = sinceISO(period);
   const label = period === 'mes' ? 'este mes' : 'esta semana';
 
-  const [finRes, payRes, cobrar] = await Promise.all([
+  // DOS fuentes, como el resumen diario: Supabase guarda lo automático (el
+  // alquiler del consultorio por sesión) y la hoja "Neura - Finanzas" tiene
+  // todo lo que Mirai dicta por voz desde el 18 jul 2026. Leer solo Supabase
+  // dejaba este resumen ciego a casi todos sus gastos reales.
+  const [finRes, payRes, cobrar, hoja] = await Promise.all([
     miraiSupabase.from('finances').select('direction, amount, category').gte('occurred_at', since).limit(2000),
     miraiSupabase.from('payments').select('amount').gte('created_at', since).limit(2000),
     deudoresPacientes(),
+    getFinanceRange(period === 'mes' ? 30 : 7),
   ]);
   const fin = finRes.data ?? [];
   const pays = payRes.data ?? [];
@@ -53,8 +59,9 @@ export async function buildResumenFinanzas({ period = 'semana' } = {}) {
 
   const gastos = fin.filter((f) => f.direction === 'gasto');
   const ingresos = fin.filter((f) => f.direction === 'ingreso');
-  const totalGasto = gastos.reduce((a, f) => a + Number(f.amount || 0), 0);
-  const totalIngreso = ingresos.reduce((a, f) => a + Number(f.amount || 0), 0);
+  const nMovs = fin.length + (hoja?.count ?? 0);
+  const totalGasto = gastos.reduce((a, f) => a + Number(f.amount || 0), 0) + (hoja?.gastos ?? 0);
+  const totalIngreso = ingresos.reduce((a, f) => a + Number(f.amount || 0), 0) + (hoja?.ingresos ?? 0);
   const facturado = pays.reduce((a, p) => a + Number(p.amount || 0), 0);
 
   const byCat = new Map();
@@ -62,16 +69,19 @@ export async function buildResumenFinanzas({ period = 'semana' } = {}) {
     const c = g.category || 'Otros';
     byCat.set(c, (byCat.get(c) || 0) + Number(g.amount || 0));
   }
+  for (const [c, v] of Object.entries(hoja?.categorias ?? {})) {
+    byCat.set(c, (byCat.get(c) || 0) + Number(v || 0));
+  }
   const cats = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
   const catLines = cats.length ? cats.map(([c, v]) => `• ${c}: ${money(v)}`).join('\n') : '• (sin gastos)';
 
-  if (fin.length === 0 && pays.length === 0 && !cobrar.deudores.length) {
+  if (nMovs === 0 && pays.length === 0 && !cobrar.deudores.length) {
     return `💸 *Tu plata — ${label}*\n\nNo registraste movimientos ${label}. Cuando gastes algo dime "gasté 20 en el taxi" y lo anoto 🙂`;
   }
 
   const datos = [
     `Periodo: ${label}`,
-    `Gastos totales: ${money(totalGasto)} en ${gastos.length} movimientos`,
+    `Gastos totales: ${money(totalGasto)} en ${nMovs} movimientos`,
     `Gastos por categoría:\n${catLines}`,
     `Ingresos personales registrados: ${money(totalIngreso)}`,
     `Facturado en el consultorio (pagos de pacientes): ${money(facturado)} en ${pays.length} pagos`,

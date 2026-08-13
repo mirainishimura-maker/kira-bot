@@ -56,3 +56,10 @@ export async function logFinanceToSheet(data) {
 export async function getFinanceToday() {
   return callSheet('financeToday', {});
 }
+
+// Totales de los últimos N días + desglose por categoría de gasto, para el
+// resumen de finanzas: { count, ingresos, gastos, categorias } o null si falla.
+// Requiere la acción `financeRange` en el Apps Script (re-deployarlo).
+export async function getFinanceRange(days = 7) {
+  return callSheet('financeRange', { days });
+}

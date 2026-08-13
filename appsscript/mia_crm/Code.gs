@@ -114,6 +114,7 @@ function doPost(e) {
       // ─── Finanzas (hoja separada) ───
       case 'logFinance':         return ok(logFinance(body.data || {}));
       case 'financeToday':       return ok(financeToday());
+      case 'financeRange':       return ok(financeRange(body.days));
       default:            return err('unknown action: ' + body.action);
     }
   } catch (ex) {
@@ -830,4 +831,39 @@ function financeToday() {
     if (row[1] === 'Ingreso') ingresos += monto; else gastos += monto;
   }
   return { count: count, ingresos: ingresos, gastos: gastos };
+}
+
+// Totales de los últimos N días, con el desglose por categoría de gasto.
+// Lo usa el resumen de finanzas (semanal/mensual): sin esto solo veía lo de
+// Supabase, y desde que los movimientos por voz viven en esta hoja, ese
+// resumen quedaba ciego a casi todo lo que Mirai gasta.
+// → { count, ingresos, gastos, categorias: { <categoría>: monto } }
+function financeRange(days) {
+  const n = Number(days) > 0 ? Number(days) : 7;
+  const sh = getFinanceSheet_();
+  const lastRow = sh.getLastRow();
+  const vacio = { count: 0, ingresos: 0, gastos: 0, categorias: {} };
+  if (lastRow < 2) return vacio;
+
+  const values = sh.getRange(2, 1, lastRow - 1, FIN_HEADERS.length).getValues();
+  const desde = new Date();
+  desde.setDate(desde.getDate() - n);
+
+  let count = 0, ingresos = 0, gastos = 0;
+  const categorias = {};
+  for (let i = 0; i < values.length; i++) {
+    const row = values[i];
+    const fecha = row[0];
+    if (!(fecha instanceof Date) || fecha < desde) continue;
+    count++;
+    const monto = Number(row[2]) || 0;
+    if (row[1] === 'Ingreso') {
+      ingresos += monto;
+    } else {
+      gastos += monto;
+      const cat = String(row[3] || 'Otros');
+      categorias[cat] = (categorias[cat] || 0) + monto;
+    }
+  }
+  return { count: count, ingresos: ingresos, gastos: gastos, categorias: categorias };
 }
