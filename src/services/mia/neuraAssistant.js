@@ -138,6 +138,7 @@ Reglas:
 - BLOQUEAR AGENDA (Mirai se marca NO DISPONIBLE en SU horario — NO es un paciente, NO es un recordatorio): "bloquéame / bloquea mi agenda / bloquear horario / no estoy disponible / no me pongas citas / no ofrezcas turnos / tápame / ocúpame / márcame ocupada / cierra mi agenda / estaré fuera / de viaje / no atiendo el <día/hora>" → bloquear_agenda.
   bloqueo.start_iso = ISO con offset Lima -05:00 (día + hora de inicio). bloqueo.end_iso = ISO -05:00 del fin SOLO si da un fin explícito o un rango ("de 5 a 6pm", "hasta el viernes", "de las 5 a las 7"); si no da fin, null. bloqueo.motivo = el motivo en breve, o null.
   DIFERENCIA CLAVE: "recuérdame X" es agregar_recordatorio; "agéndame/cítala a X" con un PACIENTE es agendar_cita; bloquear_agenda es cuando Mirai tapa SU propio tiempo para que Mia NO ofrezca esos turnos.
+  ⚠️ REGLA DURA — bloquear_agenda SOLO si MIRAI habla de SU PROPIA indisponibilidad, en primera persona ("no atiendo", "estaré fuera", "bloquéame"). Si el mensaje cuenta que OTRA PERSONA confirmó, pidió o quiere una cita —"la señora Monica confirmó para el martes 18 a las 9", "el Dr. X quiere cita el jueves", "me confirmaron para mañana 10am", o un mensaje reenviado de la clínica— eso es agendar_cita, NUNCA bloquear_agenda. Confundirlos le tapa un día entero de trabajo. Ante la duda entre las dos, elige agendar_cita.
 - QUITAR BLOQUEO: "quita/saca el bloqueo de <día/hora> / desbloquea <...> / vuelve a abrir mi agenda el <...> / ya estoy disponible el <...>" → desbloquear_agenda. bloqueo.start_iso / bloqueo.end_iso igual que en bloquear_agenda.
 - CONSULTAR BLOQUEOS: "qué tengo bloqueado / muéstrame mis bloqueos / cuándo no estoy disponible / mis bloqueos" → consultar_bloqueos.
 - CONSULTAR PACIENTE: "qué trabajé/vi con X / cómo va X / cuánto me debe X / cuánto ha invertido X / en qué sesión va X / cuántas sesiones lleva X / cuándo veo a X / cuándo es la cita de X" → consultar_paciente. consulta_paciente.patient_name; aspecto = "sesion" | "saldo" | "cita" | "todo". La respuesta ya trae número de sesión e invertido, así que NUNCA le pidas esos datos a Mirai: están en el sistema.
@@ -947,11 +948,28 @@ function finDelDiaLima(startISO) {
 }
 
 // Normaliza el rango: fin explícito válido, o fin del día del inicio. → { startISO, endISO } o null.
+// Una hora después del inicio, conservando la hora de pared de Lima.
+function masUnaHora(startISO) {
+  const t = new Date(startISO).getTime();
+  if (!Number.isFinite(t)) return null;
+  const s = new Date(t + 60 * 60 * 1000).toLocaleString('sv-SE', { timeZone: 'America/Lima' });
+  return `${s.slice(0, 10)}T${s.slice(11, 19)}-05:00`;
+}
+
 function rangoBloqueo(b) {
   const startISO = b?.start_iso;
   if (!startISO) return null;
   let endISO = b?.end_iso || null;
-  if (!endISO || new Date(endISO).getTime() <= new Date(startISO).getTime()) endISO = finDelDiaLima(startISO);
+  if (!endISO || new Date(endISO).getTime() <= new Date(startISO).getTime()) {
+    // Sin fin explícito: si dio una HORA concreta, bloqueamos SOLO esa hora.
+    // Antes se tapaba hasta medianoche, así que una clasificación errónea le
+    // borraba el día entero (caso real del 13 ago: "…la señora Monica
+    // confirmó para el día martes 18 9:00am" se leyó como bloqueo y dejó el
+    // martes tapado de 9am a 11:59pm). Solo se bloquea el día completo cuando
+    // no mencionó hora (el ISO viene a las 00:00).
+    const horaPared = Number(String(startISO).slice(11, 13));
+    endISO = horaPared === 0 ? finDelDiaLima(startISO) : masUnaHora(startISO);
+  }
   return endISO ? { startISO, endISO } : null;
 }
 
