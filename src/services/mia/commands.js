@@ -299,10 +299,11 @@ async function cmdListPatients() {
   }
   const lines = rows.map((p) => {
     const pausa = p.en_pausa ? ' · _en pausa_' : '';
+    const sinWa = p.sin_whatsapp ? ' · _sin WhatsApp_' : '';
     const ses = p.sesiones
       ? ` — ${p.sesiones} sesión${p.sesiones === 1 ? '' : 'es'}, última ${String(p.ultima_sesion).slice(0, 10)}`
       : ' — sin sesiones registradas';
-    return `• *${p.nombre}*${ses}${pausa}`;
+    return `• *${p.nombre}*${ses}${sinWa}${pausa}`;
   });
   return reply(`🩺 *Tus pacientes* (${rows.length}):\n${lines.join('\n')}`);
 }

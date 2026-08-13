@@ -30,9 +30,32 @@ export async function findPatientByPhone(phone) {
   return data;
 }
 
-export async function addPatient({ phone, nombre, etiqueta }) {
-  if (!miraiSupabase) throw new Error('Mia no está habilitado (faltan env vars MIRAI_*)');
+// No todas las pacientes llegan por WhatsApp: las que deriva Mont Sinai las ve
+// Mirai en consulta sin que nunca le escriban. La columna `phone` es NOT NULL,
+// así que esas se guardan con un teléfono ficticio que empieza con "0" — un
+// número imposible en WhatsApp (los peruanos son 51 9XXXXXXXX), de modo que
+// Mia jamás intenta escribirles. Al mostrarlas se dice "sin WhatsApp".
+export function telefonoFicticio() {
+  return `0${Date.now()}${Math.floor(Math.random() * 100)}`;
+}
+export function sinWhatsapp(phone) {
+  return String(phone || '').startsWith('0');
+}
+
+// Le pone su WhatsApp real a una paciente que se registró sin número.
+export async function asignarTelefono(nombreOId, phone) {
+  if (!miraiSupabase) return null;
   const normalized = normalizePhone(phone);
+  if (!normalized) return null;
+  const { data, error } = await miraiSupabase
+    .from('patients').update({ phone: normalized }).eq('id', nombreOId).select().maybeSingle();
+  if (error) { console.error('[mia/patients] asignarTelefono:', error.message); return null; }
+  return data;
+}
+
+export async function addPatient({ phone, nombre, etiqueta, sinTelefono = false }) {
+  if (!miraiSupabase) throw new Error('Mia no está habilitado (faltan env vars MIRAI_*)');
+  const normalized = sinTelefono ? telefonoFicticio() : normalizePhone(phone);
   if (!normalized) throw new Error('Teléfono inválido');
   if (!nombre || !nombre.trim()) throw new Error('Nombre requerido');
 
@@ -149,6 +172,7 @@ export async function listPacientesActivos() {
       return {
         nombre: p.nombre,
         phone: p.phone,
+        sin_whatsapp: sinWhatsapp(p.phone),
         estado: p.estado,
         sesiones: s?.n ?? 0,
         ultima_sesion: s?.ultima ?? null,

@@ -75,7 +75,7 @@ Formato exacto:
   "diario": { "content": string } | null,
   "habito": { "kind": "agua" | "sueño" | "ejercicio" | "comida" | "descanso" | "disfrute" | "otro", "amount": number | null, "unit": string | null, "note": string | null } | null,
   "persona": { "name": string, "relation": string | null, "phone": string | null, "birthday": string | null } | null,
-  "paciente_nuevo": { "name": string | null, "phone": string | null } | null,
+  "paciente_nuevo": { "name": string | null, "phone": string | null, "sin_telefono": boolean } | null,
   "listado": { "tipo": "pacientes" | "leads", "origen": "campaña" | "montsinai" | "organico" | null } | null,
   "marcar": { "name": string, "es_paciente": boolean } | null,
   "pr": { "id": number | null } | null,
@@ -165,6 +165,7 @@ Reglas:
 - MARCAR COMO PACIENTE (un lead que ya empezó consulta): "X ya es mi paciente / marca a X como paciente / X pasó a consulta / ya estoy viendo a X" → marcar_paciente. marcar.name = el nombre; marcar.es_paciente = true. Si dice lo contrario ("X ya no es mi paciente / sácala de pacientes / dale de baja de mi lista"), es_paciente = false.
 - REGISTRAR PACIENTE NUEVA (alguien a quien ATIENDE en consulta, todavía no está en Neura): "registra a Maximina / agrégala como paciente / es nueva, regístrala / da de alta a X / anota a X que es paciente nueva (su número es 999...)" → registrar_paciente. paciente_nuevo.name = el nombre (o null si solo dice "es nueva, regístrala" refiriéndose a alguien que acabas de nombrar); paciente_nuevo.phone = el número si lo da (o null).
   TAMBIÉN aquí: si el mensaje es SOLO un número de teléfono peruano (9 dígitos, con o sin +51) sin nada más, es el número de la paciente que quedó pendiente de registrar → registrar_paciente con name null y phone = ese número.
+  SIN TELÉFONO: no todas las pacientes llegan por WhatsApp — a varias se las deriva la clínica Mont Sinai y Mirai las ve en consulta sin tener su número. Si dice "no tengo su número", "no me ha escrito", "no tiene WhatsApp", "me la derivó Mont Sinai", "la vio Mont Sinai", "no está registrada porque no me ha hablado por WhatsApp" o similar → registrar_paciente con paciente_nuevo.sin_telefono = true (y phone null). En cualquier otro caso sin_telefono = false.
   DIFERENCIA CLAVE con agregar_persona: paciente = alguien que atiende en consulta; persona = un vínculo personal suyo (mamá, pareja, amiga) para que Neura la ayude a cuidarlo.
 - SILENCIAR A UN PACIENTE (PAUSA reversible — Mia deja de responderle mientras Mirai lo atiende manual, por AHORA): "silencia a X / que Mia no le responda a X por ahora / pon a X en pausa / deja de responderle a X" → silenciar_paciente. control_paciente.patient_name = paciente.
 - ACTIVAR A UN PACIENTE (quita la pausa/silencio, Mia vuelve a responderle): "reactiva a X / que Mia le vuelva a responder a X / quítale la pausa a X / activa a X de nuevo" → activar_paciente. control_paciente.patient_name = paciente.
@@ -296,23 +297,36 @@ async function marcarPaciente(m) {
     : { handled: true, reply: `Listo, saqué a *${updated.nombre}* de tus pacientes (vuelve a leads).` };
 }
 
-// Registra una paciente nueva. `phone` puede faltar: en ese caso pedimos el
-// número y dejamos el nombre pendiente para el siguiente mensaje.
+// Registra una paciente nueva. El teléfono puede faltar de dos formas muy
+// distintas: que Mirai aún no lo haya dicho (pedimos y esperamos), o que NO
+// EXISTA porque la paciente nunca le escribió — las que deriva Mont Sinai las
+// ve en consulta sin tener su WhatsApp. Antes ese segundo caso la dejaba en un
+// bucle pidiéndole un dato que no tenía.
 async function registrarPaciente(p, raw) {
   const nombre = (p?.name || '').trim() || pacienteNuevoPendiente();
   if (!nombre) return { handled: true, reply: '¿Cómo se llama la paciente que quieres registrar? 🙂' };
 
+  const sinTelefono = Boolean(p?.sin_telefono);
   const phone = normalizePhone(p?.phone);
-  if (!phone) {
+  if (!phone && !sinTelefono) {
     recordarPacienteNuevo(nombre);
-    return { handled: true, reply: `Va, registro a *${nombre}* 😊 Pásame su número de WhatsApp y la dejo lista.` };
+    return {
+      handled: true,
+      reply: `Va, registro a *${nombre}* 😊 Pásame su número de WhatsApp y la dejo lista.\n\n_Si no lo tienes porque no te ha escrito (te la derivó Mont Sinai, por ejemplo), dime "no tengo su número" y la registro igual._`,
+    };
   }
 
   try {
-    const { duplicated, patient } = await addPatient({ phone, nombre, etiqueta: 'paciente' });
+    const { duplicated, patient } = await addPatient({ phone, nombre, etiqueta: 'paciente', sinTelefono });
     pacientePendiente = null;
     if (duplicated) {
       return { handled: true, reply: `Ese número ya estaba en tu lista como *${patient?.nombre || nombre}* — no la dupliqué 🙂` };
+    }
+    if (sinTelefono) {
+      return {
+        handled: true,
+        reply: `✅ Registré a *${patient.nombre}* — sin WhatsApp, la atiendes en consulta.\n\nYa puedes dictarme su nota de sesión, su pago o agendarle cita 🌸\n\n_El día que te escriba, dime su número y se lo agrego._`,
+      };
     }
     return { handled: true, reply: `✅ Registré a *${patient.nombre}* (${patient.phone}).\n\nYa puedes dictarme su nota de sesión, su pago o agendarle cita 🌸` };
   } catch (e) {
