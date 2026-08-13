@@ -156,7 +156,7 @@ async function procesarMensajes(autor, contenido) {
       await avisarMirai(`⚠️ Detecté una corrección de ${autor} pero no pude guardarla. Revisa que exista la tabla *${TABLE}* en Supabase.\n\nEl pedido era:\n"${contenido.slice(0, 500)}"`);
       return;
     }
-    await avisarMirai(formatoNuevaCorreccion(ticket));
+    await avisarMirai(formatoNuevaCorreccion(ticket, clas.sinIA));
   } else if (clas.tipo === 'pregunta') {
     await avisarMirai(`❓ *Pregunta en el grupo* — de ${autor}:\n"${clas.detalle || contenido}"\n\n(Mia está muda en el grupo; respóndele tú 🌸)`);
   } else {
@@ -164,12 +164,7 @@ async function procesarMensajes(autor, contenido) {
   }
 }
 
-async function clasificar(autor, contenido) {
-  // Sin cerebro Claude: no perdemos el pedido, lo tratamos como corrección cruda.
-  if (!anthropic) {
-    return { tipo: 'correccion', titulo: contenido.slice(0, 60), detalle: contenido };
-  }
-  const system = `Eres el filtro de Mia. En un grupo de WhatsApp, el equipo le manda a Mirai correcciones y pedidos sobre un SISTEMA WEB que ella construye (app de gestión de una clínica: pacientes, citas, notas clínicas, finanzas, envío de WhatsApp). Clasifica el mensaje del equipo.
+const SYSTEM_FILTRO = `Eres el filtro de Mia. En un grupo de WhatsApp, el equipo le manda a Mirai correcciones y pedidos sobre un SISTEMA WEB que ella construye (app de gestión de una clínica: pacientes, citas, notas clínicas, finanzas, envío de WhatsApp). Clasifica el mensaje del equipo.
 
 Responde SOLO con JSON válido, sin texto extra:
 {
@@ -183,27 +178,72 @@ Reglas:
 - "pregunta": preguntan algo (cómo va, un estado, una duda) sin pedir un cambio.
 - "ruido": saludos, agradecimientos, confirmaciones o coordinación que NO es un cambio ("ok", "gracias", "buenos días", "ya vi").
 - No inventes cambios que no están. Si dudas entre "correccion" y "ruido", elige "ruido".`;
-  try {
-    const resp = await anthropic.messages.create({
-      model: CLAUDE_MODEL,
-      max_tokens: 800,
-      system,
-      messages: [{ role: 'user', content: `Mensaje de ${autor}:\n\n${contenido}` }],
-    });
-    const raw = (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
-    const clean = raw.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
-    const json = JSON.parse(clean);
-    const tipo = ['correccion', 'pregunta', 'ruido'].includes(json.tipo) ? json.tipo : 'ruido';
-    return {
-      tipo,
-      titulo: String(json.titulo ?? '').trim().slice(0, 70) || contenido.slice(0, 60),
-      detalle: String(json.detalle ?? contenido).trim(),
-    };
-  } catch (e) {
-    console.error('[itaca] clasificar error:', e.message);
-    // Ante error de formato: no perdemos el pedido.
-    return { tipo: 'correccion', titulo: contenido.slice(0, 60), detalle: contenido };
+
+function _leerClasificacion(raw, contenido) {
+  const clean = String(raw || '').replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  const json = JSON.parse(clean);
+  const tipo = ['correccion', 'pregunta', 'ruido'].includes(json.tipo) ? json.tipo : 'ruido';
+  return {
+    tipo,
+    titulo: String(json.titulo ?? '').trim().slice(0, 70) || contenido.slice(0, 60),
+    detalle: String(json.detalle ?? contenido).trim(),
+  };
+}
+
+// Último recurso, sin ninguna IA disponible: decide por las palabras si el
+// mensaje PIDE un cambio. Antes, sin cerebro se anotaba TODO como corrección y
+// la lista se llenaba de saludos, links de reuniones y agradecimientos.
+const PIDE_CAMBIO = /(agregar|agreguen|añadir|poner|pongan|quitar|sacar|cambiar|cambien|modificar|corregir|arreglar|habilitar|permitir|que se pueda|que no permita|que salga|que aparezca|no aparece|no funciona|no carga|no deja|no redirige|no se ve|error|falla|bug|duplica|duplicado)/i;
+
+function clasificarSinIA(contenido) {
+  const t = (contenido || '').trim();
+  // Muy corto o sin ningún verbo de pedido: casi seguro no es una corrección.
+  if (t.length < 25 || !PIDE_CAMBIO.test(t)) {
+    return { tipo: 'ruido' };
   }
+  return { tipo: 'correccion', titulo: t.slice(0, 60), detalle: t, sinIA: true };
+}
+
+async function clasificar(autor, contenido) {
+  const mensaje = `Mensaje de ${autor}:\n\n${contenido}`;
+
+  if (anthropic) {
+    try {
+      const resp = await anthropic.messages.create({
+        model: CLAUDE_MODEL,
+        max_tokens: 800,
+        system: SYSTEM_FILTRO,
+        messages: [{ role: 'user', content: mensaje }],
+      });
+      const raw = (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+      return _leerClasificacion(raw, contenido);
+    } catch (e) {
+      console.error('[itaca] clasificar con Claude falló:', e.message);
+    }
+  }
+
+  // Respaldo: la cuenta de OpenAI de Mirai, la misma que transcribe los audios
+  // del grupo. Sirve cuando la organización se queda sin créditos de Anthropic.
+  if (miraiOpenai) {
+    try {
+      const resp = await miraiOpenai.chat.completions.create({
+        model: MIA_MODEL,
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: SYSTEM_FILTRO },
+          { role: 'user', content: mensaje },
+        ],
+      });
+      console.log('[itaca] clasificado con el respaldo de OpenAI.');
+      return _leerClasificacion(resp.choices?.[0]?.message?.content, contenido);
+    } catch (e) {
+      console.error('[itaca] clasificar con OpenAI falló:', e.message);
+    }
+  }
+
+  console.warn('[itaca] sin IA disponible: clasifico por palabras clave.');
+  return clasificarSinIA(contenido);
 }
 
 // ---------------------------------------------------------------------------
@@ -380,8 +420,14 @@ Instrucciones:
 // ---------------------------------------------------------------------------
 // Mensajes a Mirai
 // ---------------------------------------------------------------------------
-function formatoNuevaCorreccion(t) {
-  return `📝 *Corrección #${t.id}* — de ${t.autor || 'el equipo'}\n*${t.titulo}*\n\n${t.detalle}\n\nDile a Mia "apruebo la #${t.id}" para implementarla, o "descarta la #${t.id}".`;
+function formatoNuevaCorreccion(t, sinIA = false) {
+  // Ojo con el verbo: "/ok N" la manda a IMPLEMENTAR; "apruebo la #N" es para
+  // después, cuando ya hay PR y se va a hacer el merge. Confundirlos hace que
+  // Mia responda "no tiene un PR esperando".
+  const aviso = sinIA
+    ? '\n\n⚠️ _No pude clasificarla bien (me quedé sin cerebro): puede que ni sea una corrección._'
+    : '';
+  return `📝 *Corrección #${t.id}* — de ${t.autor || 'el equipo'}\n*${t.titulo}*\n\n${t.detalle}${aviso}\n\nMándala a implementar con */ok ${t.id}*, o descártala con "descarta la #${t.id}".`;
 }
 
 export function formatoListaPendientes(tickets) {
