@@ -188,6 +188,11 @@ export const config = {
         // Repo donde vive el sistema y token para abrir issues.
         repo: process.env.ITACA_REPO || 'conversemositaca-tech/itaca-conversemos',
         githubToken: process.env.GITHUB_TOKEN || '',
+        // Itaca en Railway: para disparar sus recordatorios de cita desde acá,
+        // que antes dependían de una Tarea programada en la PC de Mirai. El
+        // token es el mismo ITACA_INTEGRACION_TOKEN que Itaca ya tiene.
+        apiUrl: process.env.ITACA_API_URL || '',
+        token: process.env.ITACA_INTEGRACION_TOKEN || '',
         // Debounce para agrupar varios mensajes seguidos de la misma persona
         // (ej: 3 audios que son una sola corrección). Default 60s.
         debounceMs: (() => {
