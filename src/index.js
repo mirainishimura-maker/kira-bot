@@ -26,6 +26,7 @@ import { runMetricas } from './services/mia/metricas.js';
 import { runImperio } from './services/mia/imperio.js';
 import { startNeuraCron, runNeuraSweep } from './services/neura/publisher.js';
 import { startItacaPRCron, chequearPRs } from './services/mia/itacaCorrecciones.js';
+import { startItacaRecordatoriosCron, dispararRecordatorios } from './services/mia/itacaRecordatorios.js';
 import { presionarBoton, presionarBotonMirai } from './services/pieroBoton.js';
 import { botonAppHtml } from './services/botonApp.js';
 
@@ -140,6 +141,23 @@ app.post('/admin/recordatorios', async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error('[admin/recordatorios] falló:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Recordatorios de ITACA (los que Itaca manda a SUS pacientes, distintos de los
+// de Mia). Dry-run por defecto: muestra a quién le tocaría hoy sin enviar.
+// ?dry=false los manda de verdad. Protegido por WEBHOOK_SECRET.
+app.post('/admin/itaca-recordatorios', async (req, res) => {
+  if (!config.webhookSecret || req.header('x-admin-secret') !== config.webhookSecret) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
+  const dry = !(req.query.dry === 'false' || req.query.dry === '0');
+  try {
+    const result = await dispararRecordatorios({ dry, fecha: req.query.fecha || null });
+    res.status(result.ok ? 200 : 502).json(result);
+  } catch (err) {
+    console.error('[admin/itaca-recordatorios] falló:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -415,6 +433,7 @@ app.listen(config.port, () => {
     startGenteCron();
     startPagosCron();
     startItacaPRCron();
+    startItacaRecordatoriosCron();
     startSerumsCron();
     startBuenasNochesCron();
   }
