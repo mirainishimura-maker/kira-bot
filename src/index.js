@@ -434,8 +434,13 @@ app.listen(config.port, () => {
     startPagosCron();
     startItacaPRCron();
     startItacaRecordatoriosCron();
-    startSerumsCron();
-    startBuenasNochesCron();
+    // Apagados a pedido de Mirai (14 ago 2026): el recordatorio de las 9:30 y
+    // el de buenas noches de las 22:00 eran mensajes diarios de acompañamiento,
+    // no información que necesite. Para volver a prenderlos, descomentar estas
+    // dos líneas (su otro interruptor son las env SERUMS_REMINDER_ENABLED y
+    // BUENAS_NOCHES_ENABLED en 'false').
+    // startSerumsCron();
+    // startBuenasNochesCron();
   }
   // NEURA (publicador de Instagram) — independiente de Mia, se auto-gatea.
   startNeuraCron();
